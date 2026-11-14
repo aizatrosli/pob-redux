@@ -12,6 +12,8 @@ use crate::{Error, Result};
 const HOST_LUA: &str = include_str!("../lua/host.lua");
 const BRIDGE_LUA: &str = include_str!("../lua/bridge.lua");
 const MOD_FAMILIES_LUA: &str = include_str!("../lua/mod_families.lua");
+const SEARCH_LUA: &str = include_str!("../lua/search.lua");
+const SEARCH_PROFILES: &str = include_str!("../lua/search_profiles.json");
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -86,7 +88,8 @@ impl Engine {
 
         let families: Table = lua.load(MOD_FAMILIES_LUA).set_name("mod_families.lua").eval()?;
         globals.set("__mod_families", families)?;
-        let methods: Table = lua.load(BRIDGE_LUA).set_name("bridge.lua").eval()?;
+        let (methods, util): (Table, Table) = lua.load(BRIDGE_LUA).set_name("bridge.lua").eval()?;
+        lua.load(SEARCH_LUA).set_name("search.lua").call::<()>((&methods, util, SEARCH_PROFILES))?;
 
         let boot_ms = t0.elapsed().as_millis();
         log::info!("pob-engine booted in {boot_ms} ms");
