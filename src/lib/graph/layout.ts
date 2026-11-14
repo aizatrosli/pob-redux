@@ -25,7 +25,7 @@ export function layout(nodes: LayoutNode[], edges: LayoutEdge[], iterations = 32
   const n = nodes.length;
   const idx = new Map(nodes.map((v, i) => [v.id, i]));
   const clusters = new Set(nodes.map((v) => v.cluster ?? 0)).size;
-  const span = 60 * Math.sqrt(n + 1);
+  const span = 40 * Math.sqrt(n + 1);
   const x = new Float64Array(n);
   const y = new Float64Array(n);
   nodes.forEach((v, i) => {
@@ -35,7 +35,7 @@ export function layout(nodes: LayoutNode[], edges: LayoutEdge[], iterations = 32
     y[i] = Math.sin(a) * base + (hash(v.id + "y") - 0.5) * span * 0.35;
   });
   const links = edges.map((e) => [idx.get(e.s), idx.get(e.t), e.w] as const).filter((l): l is readonly [number, number, number] => l[0] != null && l[1] != null && l[0] !== l[1]);
-  const k = 70;
+  const k = 46;
   const dx = new Float64Array(n);
   const dy = new Float64Array(n);
   for (let it = 0; it < iterations; it++) {
@@ -58,8 +58,8 @@ export function layout(nodes: LayoutNode[], edges: LayoutEdge[], iterations = 32
         dx[j] -= ex * f;
         dy[j] -= ey * f;
       }
-      dx[i] -= x[i] * 0.02;
-      dy[i] -= y[i] * 0.02;
+      dx[i] -= x[i] * 0.5;
+      dy[i] -= y[i] * 0.5;
     }
     for (const [a, b, w] of links) {
       const ex = x[a] - x[b];

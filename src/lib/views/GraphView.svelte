@@ -84,7 +84,8 @@
     }
   }
   const mark: Record<CheckStatus, string> = { ok: "✓", warn: "!", fail: "✕" };
-  const failing = $derived(checks.filter((c) => c.status === "fail").length);
+  const failing = $derived(checks.filter((c) => c.status === "fail"));
+  const flagged = $derived(checks.filter((c) => c.status !== "ok"));
 
   // ---- results
   let mode = $state<"mechanics" | "ladder">("mechanics");
@@ -104,9 +105,14 @@
   }
   $effect(() => {
     void mode;
-    void graph.started;
+    void doc;
     clearPicks();
     query = "";
+  });
+  // a pick can fall out of the request; the ladder needs its data
+  $effect(() => {
+    if (pickedChain && !chains.some((c) => c.id === pickedChain)) pickedChain = null;
+    if (mode === "ladder" && !doc?.ladder) mode = "mechanics";
   });
 
   const KIND_COLOUR: Record<string, string> = {
@@ -144,6 +150,13 @@
         shape: n.kind === "token" ? "diamond" : "circle",
       }));
     const edges: DrawEdge[] = (doc?.mechanics?.edges ?? []).filter((e) => ids.has(e.s) && ids.has(e.t)).map((e) => ({ s: e.s, t: e.t, w: e.w, directed: true }));
+    // a graft's payoff scales its main skill without a state between them
+    const scaled = new Set<string>();
+    for (const c of chains) {
+      if (c.kind !== "graft" || c.path.length < 3 || scaled.has(`${c.path[1]}\n${c.path[2]}`)) continue;
+      scaled.add(`${c.path[1]}\n${c.path[2]}`);
+      edges.push({ s: c.path[1], t: c.path[2], w: 0.5, directed: true });
+    }
     return { nodes, edges };
   });
 
@@ -231,368 +244,396 @@
   const pct = (x: number) => `${Math.round(x * 100)}%`;
 </script>
 
-{#if !graph.started}
-  <div class="setup">
-    <div class="col">
-      <section class="panel block">
-        <div class="label">{m.graph_step_data()}</div>
-        <label
-          class="drop"
-          class:over={dragOver}
-          ondragover={(e) => {
-            e.preventDefault();
-            dragOver = true;
-          }}
-          ondragleave={() => (dragOver = false)}
-          ondrop={(e) => {
-            e.preventDefault();
-            dragOver = false;
-            void readFile(e.dataTransfer?.files[0]);
+{#snippet checkList(list: GateCheck[])}
+  <ul class="checks">
+    {#each list as c (c.id)}
+      {@const t = gateText(c)}
+      <li class={c.status}>
+        <span class="mark">{mark[c.status]}</span>
+        <div>
+          <div>{t.label}</div>
+          <div class="dim small selectable">{t.detail}</div>
+          {#each c.notes ?? [] as n (n.text)}
+            <div class="note small selectable {n.status}">{n.text}</div>
+          {/each}
+        </div>
+      </li>
+    {/each}
+  </ul>
+{/snippet}
+
+<div class="page">
+  <aside class="request">
+    <div class="label">{m.graph_step_check()}</div>
+    <span class="pill {open ? (flagged.length ? 'warn' : 'ok') : 'fail'}">
+      {open ? (flagged.length ? m.graph_check_warned() : m.graph_check_met({ n: checks.length })) : m.graph_check_unmet()}
+    </span>
+    {#if flagged.length}{@render checkList(flagged)}{/if}
+
+    <div class="label">{m.graph_step_data()}</div>
+    <label
+      class="drop"
+      class:over={dragOver}
+      ondragover={(e) => {
+        e.preventDefault();
+        dragOver = true;
+      }}
+      ondragleave={() => (dragOver = false)}
+      ondrop={(e) => {
+        e.preventDefault();
+        dragOver = false;
+        void readFile(e.dataTransfer?.files[0]);
+      }}
+    >
+      <input type="file" accept=".json,application/json" onchange={(e) => readFile(e.currentTarget.files?.[0])} />
+      {#if doc && graph.fileName}
+        <span class="fname">{graph.fileName}</span>
+        <span class="dim small">{m.graph_file_replace()}</span>
+      {:else}
+        <span>{m.graph_file_open()}</span>
+        <span class="dim small">{m.graph_file_hint()}</span>
+      {/if}
+    </label>
+    {#if graph.loadError}<div class="bad small selectable">{m.graph_file_error({ error: graph.loadError })}</div>{/if}
+    {#if doc?.mechanics}
+      <div class="dim small">
+        {m.graph_file_summary({ chains: doc.mechanics.chains.length, nodes: doc.mechanics.nodes.length, kits: doc.ladder?.kits.length ?? 0 })}
+      </div>
+    {/if}
+    <div class="row">
+      <button class="btn sm" onclick={() => copy("cmd")}>{copied === "cmd" ? m.graph_copied() : m.graph_copy_command()}</button>
+      {#if doc}<button class="btn sm ghost" onclick={() => graph.clear()}>{m.graph_file_close()}</button>{/if}
+    </div>
+
+    <div class="label">{m.graph_step_request()}</div>
+    <div class="field">
+      <span class="name">{m.graph_req_constraints()}</span>
+      <div class="chips">
+        {#each CONSTRAINT_CHOICES as c (c)}
+          <button class="btn sm" class:on={req.constraints.includes(c)} aria-pressed={req.constraints.includes(c)} onclick={() => graph.setReq({ constraints: toggle(req.constraints, c) })}>
+            {constraintLabels[c]}
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="name">{m.graph_req_class()}</span>
+      <div class="chips">
+        <select
+          class="select"
+          value={req.cls ?? ""}
+          onchange={(e) => {
+            const cls = e.currentTarget.value || null;
+            const keep = req.ascendancy && ascendancies.find((a) => a.name === req.ascendancy)?.class === cls;
+            graph.setReq({ cls, ascendancy: keep ? req.ascendancy : null });
           }}
         >
-          <input type="file" accept=".json,application/json" onchange={(e) => readFile(e.currentTarget.files?.[0])} />
-          {#if doc && graph.fileName}
-            <span class="fname">{graph.fileName}</span>
-            <span class="dim small">{m.graph_file_replace()}</span>
-          {:else}
-            <span>{m.graph_file_open()}</span>
-            <span class="dim small">{m.graph_file_hint()}</span>
-          {/if}
-        </label>
-        {#if graph.loadError}<div class="bad small selectable">{m.graph_file_error({ error: graph.loadError })}</div>{/if}
-        {#if doc?.mechanics}
-          <div class="dim small">
-            {m.graph_file_summary({ chains: doc.mechanics.chains.length, nodes: doc.mechanics.nodes.length, kits: doc.ladder?.kits.length ?? 0 })}
-          </div>
-        {/if}
-        <div class="row">
-          <button class="btn sm" onclick={() => copy("cmd")}>{copied === "cmd" ? m.graph_copied() : m.graph_copy_command()}</button>
-          {#if doc}<button class="btn sm ghost" onclick={() => graph.clear()}>{m.graph_file_close()}</button>{/if}
-        </div>
-      </section>
-
-      <section class="panel block">
-        <div class="label">{m.graph_step_request()}</div>
-
-        <div class="field">
-          <span class="name">{m.graph_req_constraints()}</span>
-          <div class="chips">
-            {#each CONSTRAINT_CHOICES as c (c)}
-              <button class="btn sm" class:on={req.constraints.includes(c)} aria-pressed={req.constraints.includes(c)} onclick={() => graph.setReq({ constraints: toggle(req.constraints, c) })}>
-                {constraintLabels[c]}
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <div class="field">
-          <span class="name">{m.graph_req_class()}</span>
-          <div class="chips">
-            <select
-              class="select"
-              value={req.cls ?? ""}
-              onchange={(e) => {
-                const cls = e.currentTarget.value || null;
-                const keep = req.ascendancy && ascendancies.find((a) => a.name === req.ascendancy)?.class === cls;
-                graph.setReq({ cls, ascendancy: keep ? req.ascendancy : null });
-              }}
-            >
-              <option value="">{m.graph_req_any_class()}</option>
-              {#if req.cls && !classes.includes(req.cls)}<option value={req.cls}>{req.cls}</option>{/if}
-              {#each classes as c (c)}<option value={c}>{c}</option>{/each}
-            </select>
-            <select
-              class="select"
-              value={req.ascendancy ?? ""}
-              onchange={(e) => {
-                const name = e.currentTarget.value || null;
-                graph.setReq({ ascendancy: name, cls: name ? (ascendancies.find((a) => a.name === name)?.class ?? req.cls) : req.cls });
-              }}
-            >
-              <option value="">{m.graph_req_any_ascendancy()}</option>
-              {#if req.ascendancy && !ascendancies.some((a) => a.name === req.ascendancy)}<option value={req.ascendancy}>{req.ascendancy}</option>{/if}
-              {#each ascendancies.filter((a) => !req.cls || a.class === req.cls) as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
-            </select>
-            {#if build.info}<button class="btn sm ghost" onclick={useBuild}>{m.graph_req_from_build()}</button>{/if}
-          </div>
-        </div>
-
-        <div class="field">
-          <span class="name">{m.graph_req_damage()}</span>
-          <div class="chips">
-            {#each DAMAGE_TYPES as d (d)}
-              <button
-                class="btn sm"
-                class:on={req.damage_types.includes(d)}
-                aria-pressed={req.damage_types.includes(d)}
-                style:--dot="var(--c-{d.toLowerCase()})"
-                onclick={() => graph.setReq({ damage_types: toggle(req.damage_types, d) })}
-              >
-                <span class="dot"></span>{d}
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <div class="field">
-          <span class="name">{m.graph_req_uniques()}</span>
-          <div class="chips">
-            {#each req.uniques as u (u.name)}
-              <button class="btn sm on" title={m.graph_req_remove()} onclick={() => graph.setReq({ uniques: req.uniques.filter((x) => x.name !== u.name) })}>{u.name} ×</button>
-            {/each}
-            <select
-              class="select"
-              disabled={!uniqueNames.length}
-              value=""
-              onchange={(e) => {
-                const name = e.currentTarget.value;
-                e.currentTarget.value = "";
-                if (name && !req.uniques.some((u) => u.name === name)) graph.setReq({ uniques: [...req.uniques, { name }], forbid_uniques: req.forbid_uniques.filter((x) => x !== name) });
-              }}
-            >
-              <option value="">{m.graph_req_add_unique()}</option>
-              {#each uniqueNames as u (u)}<option value={u}>{u}</option>{/each}
-            </select>
-          </div>
-        </div>
-
-        <div class="field">
-          <span class="name">{m.graph_req_forbid()}</span>
-          <div class="chips">
-            {#each req.forbid_uniques as u (u)}
-              <button class="btn sm on" title={m.graph_req_remove()} onclick={() => graph.setReq({ forbid_uniques: req.forbid_uniques.filter((x) => x !== u) })}>{u} ×</button>
-            {/each}
-            <select
-              class="select"
-              disabled={!uniqueNames.length}
-              value=""
-              onchange={(e) => {
-                const name = e.currentTarget.value;
-                e.currentTarget.value = "";
-                if (name && !req.forbid_uniques.includes(name)) graph.setReq({ forbid_uniques: [...req.forbid_uniques, name], uniques: req.uniques.filter((x) => x.name !== name) });
-              }}
-            >
-              <option value="">{m.graph_req_add_unique()}</option>
-              {#each uniqueNames as u (u)}<option value={u}>{u}</option>{/each}
-            </select>
-          </div>
-        </div>
-
-        <div class="field">
-          <span class="name">{m.graph_req_keystones()}</span>
-          <div class="chips">
-            {#each req.keystones as k (k)}
-              <button class="btn sm on" title={m.graph_req_remove()} onclick={() => graph.setReq({ keystones: req.keystones.filter((x) => x !== k) })}>{k} ×</button>
-            {/each}
-            <select
-              class="select"
-              disabled={!keystoneNames.length}
-              value=""
-              onchange={(e) => {
-                const name = e.currentTarget.value;
-                e.currentTarget.value = "";
-                if (name && !req.keystones.includes(name)) graph.setReq({ keystones: [...req.keystones, name] });
-              }}
-            >
-              <option value="">{m.graph_req_add_keystone()}</option>
-              {#each keystoneNames as k (k)}<option value={k}>{k}</option>{/each}
-            </select>
-          </div>
-        </div>
-
-        <div class="field">
-          <span class="name">{m.graph_req_kinds()}</span>
-          <div class="chips">
-            {#each CHAIN_KINDS as k (k)}
-              <button class="btn sm" class:on={req.chain_kinds.includes(k)} aria-pressed={req.chain_kinds.includes(k)} onclick={() => graph.setReq({ chain_kinds: toggle(req.chain_kinds, k) })}>{kindLabels[k]}</button>
-            {/each}
-            <span class="dim small">{m.graph_req_kinds_hint()}</span>
-          </div>
-        </div>
-
-        <div class="field">
-          <span class="name">{m.graph_req_novelty()}</span>
-          <div class="chips">
-            <input type="range" min="0" max="1" step="0.05" value={req.min_novelty} oninput={(e) => graph.setReq({ min_novelty: Number(e.currentTarget.value) })} />
-            <span class="mono small">{pct(req.min_novelty)}</span>
-            <span class="dim small">{m.graph_req_novelty_hint()}</span>
-          </div>
-        </div>
-
-        <div class="field">
-          <span class="name">{m.graph_req_budget()}</span>
-          <div class="chips">
-            {#each ["low", "mid", "high"] as const as t (t)}
-              <button class="btn sm" class:on={req.budget_tier === t} aria-pressed={req.budget_tier === t} onclick={() => graph.setReq({ budget_tier: t })}>
-                {t === "low" ? m.graph_budget_low() : t === "mid" ? m.graph_budget_mid() : m.graph_budget_high()}
-              </button>
-            {/each}
-            <span class="dim small">{m.graph_req_builder_hint()}</span>
-          </div>
-        </div>
-
-        <div class="row">
-          <button class="btn sm" onclick={() => copy("json")}>{copied === "json" ? m.graph_copied() : m.graph_copy_requirements()}</button>
-          <span class="dim small">{m.graph_copy_requirements_hint()}</span>
-        </div>
-      </section>
+          <option value="">{m.graph_req_any_class()}</option>
+          {#if req.cls && !classes.includes(req.cls)}<option value={req.cls}>{req.cls}</option>{/if}
+          {#each classes as c (c)}<option value={c}>{c}</option>{/each}
+        </select>
+        <select
+          class="select"
+          value={req.ascendancy ?? ""}
+          onchange={(e) => {
+            const name = e.currentTarget.value || null;
+            graph.setReq({ ascendancy: name, cls: name ? (ascendancies.find((a) => a.name === name)?.class ?? req.cls) : req.cls });
+          }}
+        >
+          <option value="">{m.graph_req_any_ascendancy()}</option>
+          {#if req.ascendancy && !ascendancies.some((a) => a.name === req.ascendancy)}<option value={req.ascendancy}>{req.ascendancy}</option>{/if}
+          {#each ascendancies.filter((a) => !req.cls || a.class === req.cls) as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
+        </select>
+        {#if build.info}<button class="btn sm ghost" onclick={useBuild}>{m.graph_req_from_build()}</button>{/if}
+      </div>
     </div>
 
-    <div class="col narrow">
-      <section class="panel block">
-        <div class="label">{m.graph_step_check()}</div>
-        <ul class="checks">
-          {#each checks as c (c.id)}
-            {@const t = gateText(c)}
-            <li class={c.status}>
-              <span class="mark">{mark[c.status]}</span>
-              <div>
-                <div>{t.label}</div>
-                <div class="dim small selectable">{t.detail}</div>
-                {#each c.notes ?? [] as n (n.text)}
-                  <div class="note small selectable {n.status}">{n.text}</div>
-                {/each}
-              </div>
-            </li>
-          {/each}
-        </ul>
-        <div class="row">
-          <button class="btn primary" disabled={!open} onclick={() => (graph.started = true)}>{m.graph_start()}</button>
-          <span class="dim small">{open ? m.graph_start_ready({ n: chains.length }) : m.graph_start_blocked({ n: failing })}</span>
-        </div>
-      </section>
+    <div class="field">
+      <span class="name">{m.graph_req_damage()}</span>
+      <div class="chips">
+        {#each DAMAGE_TYPES as d (d)}
+          <button
+            class="btn sm"
+            class:on={req.damage_types.includes(d)}
+            aria-pressed={req.damage_types.includes(d)}
+            style:--dot="var(--c-{d.toLowerCase()})"
+            onclick={() => graph.setReq({ damage_types: toggle(req.damage_types, d) })}
+          >
+            <span class="dot"></span>{d}
+          </button>
+        {/each}
+      </div>
     </div>
-  </div>
-{:else}
-  <div class="page">
+
+    <div class="field">
+      <span class="name">{m.graph_req_uniques()}</span>
+      <div class="chips">
+        {#each req.uniques as u (u.name)}
+          <button class="btn sm on" title={m.graph_req_remove()} onclick={() => graph.setReq({ uniques: req.uniques.filter((x) => x.name !== u.name) })}>{u.name} ×</button>
+        {/each}
+        <select
+          class="select"
+          disabled={!uniqueNames.length}
+          value=""
+          onchange={(e) => {
+            const name = e.currentTarget.value;
+            e.currentTarget.value = "";
+            if (name && !req.uniques.some((u) => u.name === name)) graph.setReq({ uniques: [...req.uniques, { name }], forbid_uniques: req.forbid_uniques.filter((x) => x !== name) });
+          }}
+        >
+          <option value="">{m.graph_req_add_unique()}</option>
+          {#each uniqueNames as u (u)}<option value={u}>{u}</option>{/each}
+        </select>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="name">{m.graph_req_forbid()}</span>
+      <div class="chips">
+        {#each req.forbid_uniques as u (u)}
+          <button class="btn sm on" title={m.graph_req_remove()} onclick={() => graph.setReq({ forbid_uniques: req.forbid_uniques.filter((x) => x !== u) })}>{u} ×</button>
+        {/each}
+        <select
+          class="select"
+          disabled={!uniqueNames.length}
+          value=""
+          onchange={(e) => {
+            const name = e.currentTarget.value;
+            e.currentTarget.value = "";
+            if (name && !req.forbid_uniques.includes(name)) graph.setReq({ forbid_uniques: [...req.forbid_uniques, name], uniques: req.uniques.filter((x) => x.name !== name) });
+          }}
+        >
+          <option value="">{m.graph_req_add_unique()}</option>
+          {#each uniqueNames as u (u)}<option value={u}>{u}</option>{/each}
+        </select>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="name">{m.graph_req_keystones()}</span>
+      <div class="chips">
+        {#each req.keystones as k (k)}
+          <button class="btn sm on" title={m.graph_req_remove()} onclick={() => graph.setReq({ keystones: req.keystones.filter((x) => x !== k) })}>{k} ×</button>
+        {/each}
+        <select
+          class="select"
+          disabled={!keystoneNames.length}
+          value=""
+          onchange={(e) => {
+            const name = e.currentTarget.value;
+            e.currentTarget.value = "";
+            if (name && !req.keystones.includes(name)) graph.setReq({ keystones: [...req.keystones, name] });
+          }}
+        >
+          <option value="">{m.graph_req_add_keystone()}</option>
+          {#each keystoneNames as k (k)}<option value={k}>{k}</option>{/each}
+        </select>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="name">{m.graph_req_kinds()}</span>
+      <div class="chips">
+        {#each CHAIN_KINDS as k (k)}
+          <button class="btn sm" class:on={req.chain_kinds.includes(k)} aria-pressed={req.chain_kinds.includes(k)} onclick={() => graph.setReq({ chain_kinds: toggle(req.chain_kinds, k) })}>{kindLabels[k]}</button>
+        {/each}
+        <span class="dim small">{m.graph_req_kinds_hint()}</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="name">{m.graph_req_novelty()}</span>
+      <div class="chips">
+        <input type="range" min="0" max="1" step="0.05" value={req.min_novelty} oninput={(e) => graph.setReq({ min_novelty: Number(e.currentTarget.value) })} />
+        <span class="mono small">{pct(req.min_novelty)}</span>
+        <span class="dim small">{m.graph_req_novelty_hint()}</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="name">{m.graph_req_budget()}</span>
+      <div class="chips">
+        {#each ["low", "mid", "high"] as const as t (t)}
+          <button class="btn sm" class:on={req.budget_tier === t} aria-pressed={req.budget_tier === t} onclick={() => graph.setReq({ budget_tier: t })}>
+            {t === "low" ? m.graph_budget_low() : t === "mid" ? m.graph_budget_mid() : m.graph_budget_high()}
+          </button>
+        {/each}
+        <span class="dim small">{m.graph_req_builder_hint()}</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="btn sm" onclick={() => copy("json")}>{copied === "json" ? m.graph_copied() : m.graph_copy_requirements()}</button>
+    </div>
+  </aside>
+
+  <div class="work">
     <div class="toolbar">
-      <button class="btn sm" onclick={() => (graph.started = false)}>{m.graph_back()}</button>
-      <span class="vr"></span>
       <button class="btn sm" class:on={mode === "mechanics"} aria-pressed={mode === "mechanics"} onclick={() => (mode = "mechanics")}>{m.graph_mode_mechanics()}</button>
       <button class="btn sm" class:on={mode === "ladder"} aria-pressed={mode === "ladder"} disabled={!doc?.ladder} title={doc?.ladder ? undefined : m.graph_gate_ladder_missing()} onclick={() => (mode = "ladder")}>
         {m.graph_mode_ladder()}
       </button>
-      <input class="input search" placeholder={m.graph_search()} bind:value={query} />
-      <span class="dim small">{m.graph_counts({ nodes: shown.nodes.length, edges: shown.edges.length })}</span>
+      <input class="input search" placeholder={m.graph_search()} bind:value={query} disabled={!open} />
+      {#if open}<span class="dim small">{m.graph_counts({ nodes: shown.nodes.length, edges: shown.edges.length })}</span>{/if}
       <span class="grow"></span>
-      <button class="btn sm ghost" onclick={() => canvasRef?.reset()}>{m.graph_fit()}</button>
+      <button class="btn sm ghost" disabled={!open} onclick={() => canvasRef?.reset()}>{m.graph_fit()}</button>
     </div>
     <div class="main">
       <div class="stage">
-        {#key mode}
-          <GraphCanvas bind:this={canvasRef} nodes={shown.nodes} edges={shown.edges} {highlight} selected={pickedNode} onpick={pickNode} />
-        {/key}
-        {#if mode === "mechanics"}
-          <div class="legend">
-            {#each legend as l (l.label)}
-              <span><i class:diamond={l.diamond} style:background={l.colour}></i>{l.label}</span>
-            {/each}
+        {#if open}
+          {#key mode}
+            <GraphCanvas bind:this={canvasRef} nodes={shown.nodes} edges={shown.edges} {highlight} selected={pickedNode} onpick={pickNode} />
+          {/key}
+          {#if mode === "mechanics"}
+            <div class="legend">
+              {#each legend as l (l.label)}
+                <span><i class:diamond={l.diamond} style:background={l.colour}></i>{l.label}</span>
+              {/each}
+            </div>
+          {/if}
+        {:else}
+          <div class="paused">
+            <div class="panel block">
+              <div class="label">{m.graph_paused()}</div>
+              {@render checkList(failing)}
+              <div class="dim small">{m.graph_paused_hint()}</div>
+            </div>
           </div>
         {/if}
       </div>
-      <aside class="side">
-        {#if pickedNode}
-          {@const n = nodeInfo.get(pickedNode)}
-          <div class="detail">
-            <div class="head">
-              <strong>{n?.name}</strong>
-              <button class="btn sm ghost" onclick={() => (pickedNode = null)}>×</button>
-            </div>
-            <div class="dim small">{[n?.kind, n?.ascendancy, n?.slot, n?.n != null ? m.graph_node_builds({ n: n.n }) : ""].filter(Boolean).join(" · ")}</div>
-            {#each nodeLines as l (l.type + l.other + l.line)}
-              <div class="line small selectable">
-                <span class="tag">{l.type === "produces" ? m.graph_edge_produces() : m.graph_edge_consumes()}</span>
-                {l.other}
-                <div class="dim">{l.line}</div>
-              </div>
-            {/each}
+      {#if open}
+    <aside class="side">
+      {#if pickedNode}
+        {@const n = nodeInfo.get(pickedNode)}
+        <div class="detail">
+          <div class="head">
+            <strong>{n?.name}</strong>
+            <button class="btn sm ghost" onclick={() => (pickedNode = null)}>×</button>
           </div>
-        {/if}
-        {#if mode === "mechanics"}
-          <div class="label pad">{m.graph_chains({ n: listedChains.length })}</div>
-          <div class="list">
-            {#each listedChains as c (c.id)}
-              <button class="item" class:on={pickedChain === c.id} onclick={() => pickChain(c)}>
+          <div class="dim small">{[n?.kind, n?.ascendancy, n?.slot, n?.n != null ? m.graph_node_builds({ n: n.n }) : ""].filter(Boolean).join(" · ")}</div>
+          {#each nodeLines as l (l.type + l.other + l.line)}
+            <div class="line small selectable">
+              <span class="tag">{l.type === "produces" ? m.graph_edge_produces() : m.graph_edge_consumes()}</span>
+              {l.other}
+              <div class="dim">{l.line}</div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      {#if mode === "mechanics"}
+        <div class="label pad">{m.graph_chains({ n: listedChains.length })}</div>
+        <div class="list">
+          {#each listedChains as c (c.id)}
+            <button class="item" class:on={pickedChain === c.id} onclick={() => pickChain(c)}>
+              <div class="top">
+                <strong>{c.main_name}</strong>
+                <span class="tag">{kindLabels[c.kind] ?? c.kind}</span>
+                <span class="grow"></span>
+                <span class="mono small" title={m.graph_chain_score_title()}>{c.score.toFixed(2)}</span>
+              </div>
+              <div class="small thesis">{c.thesis}</div>
+              {#if pickedChain === c.id}
+                <div class="small dim">{m.graph_chain_numbers({ fit: pct(c.fit), novelty: pct(c.novelty) })}</div>
+                {#each c.evidence as ev (ev)}<div class="small dim selectable ev">{ev}</div>{/each}
+              {/if}
+            </button>
+          {:else}
+            <div class="dim small pad">{m.graph_none()}</div>
+          {/each}
+        </div>
+      {:else}
+        <div class="tabs pad">
+          <button class="btn sm" class:on={ladderTab === "kits"} onclick={() => (ladderTab = "kits")}>{m.graph_kits({ n: doc?.ladder?.kits.length ?? 0 })}</button>
+          <button class="btn sm" class:on={ladderTab === "gaps"} onclick={() => (ladderTab = "gaps")}>{m.graph_gaps({ n: doc?.ladder?.gaps.length ?? 0 })}</button>
+        </div>
+        <div class="list">
+          {#if ladderTab === "kits"}
+            {#each doc?.ladder?.kits ?? [] as k (k.id)}
+              <button class="item" class:on={pickedKit === k.id} onclick={() => pickKit(k)}>
                 <div class="top">
-                  <strong>{c.main_name}</strong>
-                  <span class="tag">{kindLabels[c.kind] ?? c.kind}</span>
+                  <i class="swatch" style:background={kitColour(k.id)}></i>
+                  <strong>{k.label}</strong>
                   <span class="grow"></span>
-                  <span class="mono small" title={m.graph_chain_score_title()}>{c.score.toFixed(2)}</span>
+                  <span class="mono small">{m.graph_node_builds({ n: k.builds })}</span>
                 </div>
-                <div class="small thesis">{c.thesis}</div>
-                {#if pickedChain === c.id}
-                  <div class="small dim">{m.graph_chain_numbers({ fit: pct(c.fit), novelty: pct(c.novelty) })}</div>
-                  {#each c.evidence as ev (ev)}<div class="small dim selectable ev">{ev}</div>{/each}
+                <div class="small dim">{k.skills.map((s) => `${s.name} (${s.n})`).join(", ")}</div>
+                {#if pickedKit === k.id}
+                  {#if k.mean_resid != null}<div class="small">{m.graph_kit_resid({ value: (k.mean_resid >= 0 ? "+" : "") + k.mean_resid.toFixed(2) })}</div>{/if}
+                  <div class="small dim selectable">{k.core.map((c) => c.split(":").slice(1).join(":")).join(", ")}</div>
                 {/if}
               </button>
-            {:else}
-              <div class="dim small pad">{m.graph_none()}</div>
             {/each}
-          </div>
-        {:else}
-          <div class="tabs pad">
-            <button class="btn sm" class:on={ladderTab === "kits"} onclick={() => (ladderTab = "kits")}>{m.graph_kits({ n: doc?.ladder?.kits.length ?? 0 })}</button>
-            <button class="btn sm" class:on={ladderTab === "gaps"} onclick={() => (ladderTab = "gaps")}>{m.graph_gaps({ n: doc?.ladder?.gaps.length ?? 0 })}</button>
-          </div>
-          <div class="list">
-            {#if ladderTab === "kits"}
-              {#each doc?.ladder?.kits ?? [] as k (k.id)}
-                <button class="item" class:on={pickedKit === k.id} onclick={() => pickKit(k)}>
-                  <div class="top">
-                    <i class="swatch" style:background={kitColour(k.id)}></i>
-                    <strong>{k.label}</strong>
-                    <span class="grow"></span>
-                    <span class="mono small">{m.graph_node_builds({ n: k.builds })}</span>
-                  </div>
-                  <div class="small dim">{k.skills.map((s) => `${s.name} (${s.n})`).join(", ")}</div>
-                  {#if pickedKit === k.id}
-                    {#if k.mean_resid != null}<div class="small">{m.graph_kit_resid({ value: (k.mean_resid >= 0 ? "+" : "") + k.mean_resid.toFixed(2) })}</div>{/if}
-                    <div class="small dim selectable">{k.core.map((c) => c.split(":").slice(1).join(":")).join(", ")}</div>
-                  {/if}
-                </button>
-              {/each}
-            {:else}
-              <div class="dim small pad">{m.graph_gaps_hint()}</div>
-              {#each doc?.ladder?.gaps ?? [] as g (g.skill + g.kind + g.candidate)}
-                <button class="item" class:on={pickedGap === g} onclick={() => pickGap(g)}>
-                  <div class="top">
-                    <strong>{g.skill}</strong>
-                    <span>+ {g.candidate}</span>
-                    <span class="grow"></span>
-                    <span class="mono small">{g.score.toFixed(0)}</span>
-                  </div>
-                  <div class="small dim">{m.graph_gap_driven({ by: g.driven_by.map((c) => c.split(":").slice(1).join(":")).join(", ") })}</div>
-                </button>
-              {/each}
-            {/if}
-          </div>
-        {/if}
-      </aside>
+          {:else}
+            <div class="dim small pad">{m.graph_gaps_hint()}</div>
+            {#each doc?.ladder?.gaps ?? [] as g (g.skill + g.kind + g.candidate)}
+              <button class="item" class:on={pickedGap === g} onclick={() => pickGap(g)}>
+                <div class="top">
+                  <strong>{g.skill}</strong>
+                  <span>+ {g.candidate}</span>
+                  <span class="grow"></span>
+                  <span class="mono small">{g.score.toFixed(0)}</span>
+                </div>
+                <div class="small dim">{m.graph_gap_driven({ by: g.driven_by.map((c) => c.split(":").slice(1).join(":")).join(", ") })}</div>
+              </button>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+    </aside>
+      {/if}
     </div>
   </div>
-{/if}
+</div>
 
 <style>
-  .setup {
-    flex: 1;
-    display: flex;
-    gap: 12px;
-    padding: 12px;
-    overflow: auto;
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
-  .col {
-    flex: 2 1 420px;
+  .request {
+    width: 300px;
+    flex: none;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    min-width: 0;
+    gap: 10px;
+    padding: 12px;
+    overflow: auto;
+    border-right: 1px solid var(--line-0);
+    background: var(--bg-1);
   }
-  .col.narrow {
-    flex: 1 1 320px;
-    position: sticky;
-    top: 0;
+  .request > .label:not(:first-child) {
+    margin-top: 6px;
+  }
+  .work {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+  .pill {
+    align-self: flex-start;
+    padding: 2px 10px;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    font-size: var(--fs-xs);
+    font-weight: 500;
+  }
+  .pill.ok {
+    color: var(--ok);
+  }
+  .pill.warn {
+    color: var(--warn);
+  }
+  .pill.fail {
+    color: var(--bad);
+  }
+  .paused {
+    flex: 1;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    overflow: auto;
+  }
+  .paused .panel {
+    width: min(420px, 100%);
   }
   .block {
     padding: 12px;
@@ -643,15 +684,13 @@
     gap: 6px;
   }
   .field {
-    display: grid;
-    grid-template-columns: 130px 1fr;
-    gap: 8px;
-    align-items: start;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
   .field .name {
     color: var(--fg-1);
     font-size: var(--fs-sm);
-    padding-top: 3px;
   }
   .select {
     height: 22px;
@@ -702,7 +741,6 @@
   .page {
     flex: 1;
     display: flex;
-    flex-direction: column;
     min-height: 0;
   }
   .toolbar {
@@ -712,11 +750,6 @@
     padding: 6px 10px;
     border-bottom: 1px solid var(--line-0);
     background: var(--bg-1);
-  }
-  .vr {
-    width: 1px;
-    height: 16px;
-    background: var(--line-1);
   }
   .grow {
     flex: 1;
