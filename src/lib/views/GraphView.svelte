@@ -260,6 +260,10 @@
   function stepLine(s: LevelStep): string {
     if (!s.known) return m.graph_level_unknown();
     switch (s.gate) {
+      case "spirit":
+        return m.graph_level_spirit();
+      case "spirit_gear":
+        return m.graph_level_spirit_gear({ quest: s.quest ?? 0 });
       case "base":
         return m.graph_level_granted({ source: s.base ?? "" });
       case "item":

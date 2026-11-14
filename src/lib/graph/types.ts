@@ -54,10 +54,10 @@ export interface SkillTempo {
 /** The 0..1 weight on a chain's score, and the four factors it is the product of. */
 /** One part of a chain and the level at which it becomes available. */
 export interface LevelStep {
-  kind: "skill" | "unique" | "keystone" | "asc";
+  kind: "skill" | "unique" | "keystone" | "asc" | "spirit";
   name: string;
   level: number;
-  gate: "gem" | "base" | "item" | "drop" | "boss" | "unobtainable" | "passives" | "ascendancy";
+  gate: "gem" | "base" | "item" | "drop" | "boss" | "unobtainable" | "passives" | "ascendancy" | "spirit" | "spirit_gear";
   known: boolean;
   main?: boolean;
   boss?: string;
@@ -69,6 +69,8 @@ export interface LevelStep {
   points?: number | null;
   cls?: string | null;
   ascendancy?: string;
+  /** Spirit that campaign quests give in total (for the Spirit step). */
+  quest?: number;
 }
 
 export interface ChainLeveling {

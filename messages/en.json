@@ -1895,5 +1895,7 @@
   "graph_level_passives": "{n} passive points from {cls}",
   "graph_level_ascendancy": "{n} {ascendancy} points",
   "graph_level_unknown": "level unknown",
-  "graph_level_granted": "granted by {source}"
+  "graph_level_granted": "granted by {source}",
+  "graph_level_spirit": "from campaign quests",
+  "graph_level_spirit_gear": "quests give {quest}, the rest must come from gear"
 }
