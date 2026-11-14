@@ -2,7 +2,7 @@
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import GraphCanvas, { type DrawEdge, type DrawNode } from "$lib/graph/GraphCanvas.svelte";
   import { exportCommand, gate, gateOpen, matchingChains, type GateCheck } from "$lib/graph/requirements";
-  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type SkillTempo } from "$lib/graph/types";
+  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type LevelStep, type SkillTempo } from "$lib/graph/types";
   import { graph } from "$lib/state/graph.svelte";
   import { build } from "$lib/state/build.svelte";
   import { game } from "$lib/state/game.svelte";
@@ -83,6 +83,15 @@
         return {
           label: m.graph_gate_budget(),
           detail: ok ? m.graph_gate_budget_ok({ mana: v.mana, spirit: v.spirit }) : v.weighted ? m.graph_gate_budget_differs({ mana: v.mana, spirit: v.spirit }) : m.graph_gate_budget_missing(),
+        };
+      case "leveling":
+        return {
+          label: m.graph_gate_leveling(),
+          detail: !v.leveled
+            ? m.graph_gate_leveling_missing()
+            : c.status === "warn"
+              ? m.graph_gate_leveling_reranked()
+              : (v.on ? m.graph_gate_leveling_on() : m.graph_gate_leveling_off()) + (Number(v.by) > 0 ? " " + m.graph_gate_leveling_by({ level: v.by }) : ""),
         };
       case "matches":
         return { label: m.graph_gate_matches(), detail: ok ? m.graph_gate_matches_ok({ n: v.n }) : m.graph_gate_matches_none() };
@@ -247,6 +256,28 @@
     return (doc?.mechanics?.edges ?? []).filter((e) => e.s === pickedNode || e.t === pickedNode).map((e) => ({ type: e.type, other: nodeInfo.get(e.s === pickedNode ? e.t : e.s)?.name ?? "", line: e.line ?? "" }));
   });
   const pct = (x: number) => `${Math.round(x * 100)}%`;
+
+  function stepLine(s: LevelStep): string {
+    if (!s.known) return m.graph_level_unknown();
+    switch (s.gate) {
+      case "base":
+        return m.graph_level_granted({ source: s.base ?? "" });
+      case "item":
+        return m.graph_level_granted({ source: s.item ?? "" });
+      case "gem":
+        return s.level > 1 ? m.graph_level_gem() : m.graph_level_start();
+      case "boss":
+        return s.area ? m.graph_level_boss_area({ boss: s.boss ?? "", area: s.area }) : m.graph_level_boss({ boss: s.boss ?? "" });
+      case "unobtainable":
+        return m.graph_level_unobtainable();
+      case "passives":
+        return s.points == null ? m.graph_level_unknown() : m.graph_level_passives({ n: s.points, cls: s.cls ?? "" });
+      case "ascendancy":
+        return s.points == null ? m.graph_level_unknown() : m.graph_level_ascendancy({ n: s.points, ascendancy: s.ascendancy ?? "" });
+      default:
+        return s.league ? m.graph_level_drop_league({ league: s.league }) : m.graph_level_drop();
+    }
+  }
 
   function tempoLine(t: SkillTempo): string {
     const cost = Object.entries(t.cost).map(([k, x]) => (k.endsWith("PerMinute") ? m.graph_tempo_cost_channel({ n: Math.round(x / 60), resource: k.replace("PerMinute", "") }) : m.graph_tempo_cost({ n: x, resource: k })));
@@ -494,6 +525,16 @@
     </div>
 
     <div class="field">
+      <span class="name">{m.graph_req_leveling()}</span>
+      <div class="chips">
+        <button class="btn sm" class:on={req.leveling} aria-pressed={req.leveling} onclick={() => graph.setReq({ leveling: !req.leveling })}>{m.graph_req_leveling_rank()}</button>
+        <input class="input num" type="number" min="0" max="100" step="1" value={req.online_by} aria-label={m.graph_req_online_by()} onchange={(e) => graph.setReq({ online_by: Math.min(100, Math.max(0, Math.round(Number(e.currentTarget.value) || 0))) })} />
+        <span class="dim small">{m.graph_req_online_by()}</span>
+      </div>
+      <span class="dim small">{m.graph_req_leveling_hint()}</span>
+    </div>
+
+    <div class="field">
       <span class="name">{m.graph_req_resources()}</span>
       <div class="chips">
         <input class="input num" type="number" min="1" step="10" value={req.mana_per_second} aria-label={m.graph_req_mana()} onchange={(e) => graph.setReq({ mana_per_second: Math.max(1, Number(e.currentTarget.value) || 250) })} />
@@ -572,6 +613,7 @@
                 <span class="tag">{kindLabels[c.kind] ?? c.kind}</span>
                 <span class="grow"></span>
                 {#if c.tempo && c.tempo.tempo < 1}<span class="tag cut" title={factorsLine(c)}>×{c.tempo.tempo.toFixed(2)}</span>{/if}
+                {#if c.leveling}<span class="tag" class:cut={c.leveling.unobtainable || c.leveling.farm.length > 0} title={m.graph_level_tag_title({ level: c.leveling.online_level })}>{m.graph_level_tag({ level: c.leveling.online_level })}</span>{/if}
                 <span class="mono small" title={m.graph_chain_score_title()}>{c.score.toFixed(2)}</span>
               </div>
               <div class="small thesis">{c.thesis}</div>
@@ -581,6 +623,12 @@
                   <div class="small mono">{c.main_name}: {tempoLine(c.tempo.main)}</div>
                   {#each c.tempo.helpers as h (h.id)}<div class="small mono">{h.name}: {tempoLine(h)}</div>{/each}
                   {#if c.tempo.tempo < 1}<div class="small warnline">{factorsLine(c)}</div>{/if}
+                {/if}
+                {#if c.leveling}
+                  <div class="small dim">{m.graph_level_summary({ start: c.leveling.start_level, online: c.leveling.online_level, factor: c.leveling.factor.toFixed(2) })}</div>
+                  {#each c.leveling.steps as s (s.kind + s.name)}
+                    <div class="small mono" class:warnline={s.gate === "boss" || s.gate === "unobtainable"}>{m.graph_level_step({ level: s.level, name: s.name })} · {stepLine(s)}</div>
+                  {/each}
                 {/if}
                 {#each c.evidence as ev (ev)}<div class="small dim selectable ev">{ev}</div>{/each}
               {/if}

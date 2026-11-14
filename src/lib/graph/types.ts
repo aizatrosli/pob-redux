@@ -20,6 +20,10 @@ export interface GraphRequirements {
   /** Resource the build can spend each second, and Spirit it can reserve. Chains are weighted against both. */
   mana_per_second: number;
   spirit: number;
+  /** Rank chains by how early they work while leveling and what has to be farmed for them. */
+  leveling: boolean;
+  /** Hide chains that are not complete by this character level. 0 means no limit. */
+  online_by: number;
 }
 
 export type CheckStatus = "ok" | "warn" | "fail";
@@ -48,6 +52,40 @@ export interface SkillTempo {
 }
 
 /** The 0..1 weight on a chain's score, and the four factors it is the product of. */
+/** One part of a chain and the level at which it becomes available. */
+export interface LevelStep {
+  kind: "skill" | "unique" | "keystone" | "asc";
+  name: string;
+  level: number;
+  gate: "gem" | "base" | "item" | "drop" | "boss" | "unobtainable" | "passives" | "ascendancy";
+  known: boolean;
+  main?: boolean;
+  boss?: string;
+  area?: string;
+  /** Weapon base or unique that grants the skill. */
+  base?: string;
+  item?: string;
+  league?: string;
+  points?: number | null;
+  cls?: string | null;
+  ascendancy?: string;
+}
+
+export interface ChainLeveling {
+  steps: LevelStep[];
+  /** Level at which the main skill can be used. */
+  start_level: number;
+  /** Level at which every part of the chain is available. */
+  online_level: number;
+  /** Bosses that have to be farmed for boss-only uniques. */
+  farm: string[];
+  drops: string[];
+  unobtainable: boolean;
+  unknown: string[];
+  /** Score multiplier when the leveling option is on. */
+  factor: number;
+}
+
 export interface ChainTempo {
   tempo: number;
   factors: { resource: number; spirit: number; cooldown: number; time: number };
@@ -101,6 +139,7 @@ export interface GraphChain {
   score: number;
   score_raw?: number;
   tempo?: ChainTempo;
+  leveling?: ChainLeveling;
   thesis: string;
   evidence: string[];
 }
@@ -158,5 +197,7 @@ export function defaultRequirements(): GraphRequirements {
     top: 150,
     mana_per_second: 250,
     spirit: 200,
+    leveling: false,
+    online_by: 0,
   };
 }

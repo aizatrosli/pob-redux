@@ -14,6 +14,7 @@ export interface GateCheck {
     | "scope_constraints"
     | "scope_uniques"
     | "budget"
+    | "leveling"
     | "matches";
   status: CheckStatus;
   values?: Record<string, string | number>;
@@ -47,7 +48,23 @@ export function chainMatches(c: GraphChain, req: GraphRequirements, doc: GraphDo
 
 export function matchingChains(doc: GraphDoc | null, req: GraphRequirements): GraphChain[] {
   if (!doc?.mechanics) return [];
-  return doc.mechanics.chains.filter((c) => chainMatches(c, req, doc)).slice(0, req.top);
+  const inFile = !!doc.requirements.leveling;
+  const kept = doc.mechanics.chains.filter((c) => chainMatches(c, req, doc) && levelingMatches(c, req));
+  if (inFile === req.leveling) return kept.slice(0, req.top);
+  // The file was ranked the other way: put the leveling factor on, or take it off, and sort again.
+  return kept
+    .map((c) => {
+      const f = c.leveling?.factor ?? 1;
+      return { ...c, score: req.leveling ? c.score * f : f > 0 ? c.score / f : c.score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, req.top);
+}
+
+function levelingMatches(c: GraphChain, req: GraphRequirements): boolean {
+  if (!c.leveling) return true;
+  if (req.online_by > 0 && c.leveling.online_level > req.online_by) return false;
+  return !(req.leveling && c.leveling.unobtainable);
 }
 
 /**
@@ -85,6 +102,13 @@ export function gate(doc: GraphDoc | null, req: GraphRequirements, game: string,
   const weighted = doc.mechanics?.chains.some((c) => c.tempo) ?? false;
   const sameBudget = file.mana_per_second === req.mana_per_second && file.spirit === req.spirit;
   out.push({ id: "budget", status: weighted && sameBudget ? "ok" : "warn", values: { weighted: weighted ? 1 : 0, mana: file.mana_per_second ?? "?", spirit: file.spirit ?? "?" } });
+  const leveled = doc.mechanics?.chains.some((c) => c.leveling) ?? false;
+  const wanted = req.leveling || req.online_by > 0;
+  out.push({
+    id: "leveling",
+    status: !leveled ? (wanted ? "fail" : "warn") : !!file.leveling === req.leveling ? "ok" : "warn",
+    values: { leveled: leveled ? 1 : 0, on: req.leveling ? 1 : 0, by: req.online_by },
+  });
   const n = matchingChains(doc, req).length;
   out.push({ id: "matches", status: n ? "ok" : "fail", values: { n } });
   return out;
