@@ -40,7 +40,10 @@ gear, optimise_gear searches the real mod pool for every slot and scores each ca
 resistances capped; apply its proposals with `apply` or equip_item_raw. For unique jewels, suggest_unique_jewels \
 scores every one PoB knows in every allocated socket, variants included, and ranks them; equip a pick with \
 equip_from_item_db and its `variants`. For one specific item, list_bases \
-then list_affixes for the mod pool, then craft_rare, which builds it from PoB's own affix tables. Before a \
+then list_affixes for the mod pool, then craft_rare, which builds it from PoB's own affix tables. For a \
+whole-build search, optimise_build reworks tree, supports and triggers under honest scoring (locked boss \
+config, conditional gems discounted, trigger energy), build_from_idea builds a class + skill + uniques idea \
+from nothing, and meta_search_start runs a background search for new archetypes; these take minutes. Before a \
 run of changes call checkpoint; every write returns `stats` and a `delta` \
 against the previous state, and rollback restores a checkpoint if the result is worse. Manage alternate \
 trees and gear sets with the list/select/create/copy/rename/delete _spec and _item_set tools. Use \
@@ -125,7 +128,7 @@ impl ToolContext {
         tauri::Manager::state::<crate::AppState>(&self.app).pool()
     }
 
-    fn call(&self, method: &str, params: Value) -> Result<Value, ToolError> {
+    pub(crate) fn call(&self, method: &str, params: Value) -> Result<Value, ToolError> {
         self.engine()
             .call(method, params)
             .map(|o| o.result)
@@ -226,7 +229,7 @@ impl ToolDef {
     }
 }
 
-fn obj(props: Value, required: &[&str]) -> Value {
+pub(crate) fn obj(props: Value, required: &[&str]) -> Value {
     let mut m = Map::new();
     m.insert("type".into(), json!("object"));
     m.insert("properties".into(), props);
@@ -236,7 +239,7 @@ fn obj(props: Value, required: &[&str]) -> Value {
     Value::Object(m)
 }
 
-fn prop(ty: &str, desc: &str) -> Value {
+pub(crate) fn prop(ty: &str, desc: &str) -> Value {
     json!({ "type": ty, "description": desc })
 }
 
@@ -265,6 +268,12 @@ pub(crate) fn defs(game: Game) -> Vec<ToolDef> {
 }
 
 fn defs_poe2() -> Vec<ToolDef> {
+    let mut all = defs_poe2_engine();
+    all.extend(crate::lab_tools::defs());
+    all
+}
+
+fn defs_poe2_engine() -> Vec<ToolDef> {
     let ro = |name, description: &str, schema| ToolDef { name, description: description.into(), schema, output_schema: None, read_only: true, destructive: false, idempotent: false, open_world: false, slow: false };
     let rw = |name, description: &str, schema| ToolDef { name, description: description.into(), schema, output_schema: Some(write_output()), read_only: false, destructive: false, idempotent: false, open_world: false, slow: false };
     let del = |name, description: &str, schema| ToolDef { name, description: description.into(), schema, output_schema: Some(write_output()), read_only: false, destructive: true, idempotent: false, open_world: false, slow: false };
@@ -684,8 +693,8 @@ const POE1_TEXT: &[(&str, &str)] = &[
 ];
 
 fn adapt_for_poe1(defs: &mut Vec<ToolDef>) {
-    // No attribute nodes in the PoE1 tree.
-    defs.retain(|d| d.name != "set_attribute_choice");
+    // No attribute nodes in the PoE1 tree, and exilegen's scoring data is PoE2's.
+    defs.retain(|d| d.name != "set_attribute_choice" && !crate::lab_tools::NAMES.contains(&d.name));
     defs.push(ToolDef {
         name: "suggest_cluster_jewels",
         description: "Suggest cluster jewels for the empty cluster jewel sockets the tree can reach. For each size it tries the enchants whose notables score best: the jewel is socketed, its notables allocated and PoB scores the build, which is then put back. Each suggestion carries `base`, `enchant` (and `alsoEnchants` that score the same), `notables`, `socket`, `points` (including the path to a socket not yet allocated), `delta`, `score`, `perPoint` and `raw` item text. Ranked by gain per point. Nothing is changed; apply one with apply_cluster_jewel. Takes a few seconds.".into(),
@@ -834,11 +843,11 @@ fn timeless_change_line(c: &Value) -> Value {
     })
 }
 
-fn arg_str(args: &JsonObject, key: &str) -> Option<String> {
+pub(crate) fn arg_str(args: &JsonObject, key: &str) -> Option<String> {
     args.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
-fn arg_i64(args: &JsonObject, key: &str) -> Result<Option<i64>, ToolError> {
+pub(crate) fn arg_i64(args: &JsonObject, key: &str) -> Result<Option<i64>, ToolError> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Number(n)) => n
@@ -855,7 +864,7 @@ fn arg_i64(args: &JsonObject, key: &str) -> Result<Option<i64>, ToolError> {
     }
 }
 
-fn arg_bool(args: &JsonObject, key: &str) -> Option<bool> {
+pub(crate) fn arg_bool(args: &JsonObject, key: &str) -> Option<bool> {
     match args.get(key) {
         Some(Value::Bool(b)) => Some(*b),
         Some(Value::String(s)) => match s.trim().to_ascii_lowercase().as_str() {
@@ -870,7 +879,7 @@ fn arg_bool(args: &JsonObject, key: &str) -> Option<bool> {
 /// A list argument. Small models send arrays as strings ("['Boots', 'Belt']",
 /// "Boots, Belt"), so a string is parsed as JSON first and split on commas
 /// otherwise; numbers stay numbers.
-fn arg_list(args: &JsonObject, key: &str) -> Vec<Value> {
+pub(crate) fn arg_list(args: &JsonObject, key: &str) -> Vec<Value> {
     match args.get(key) {
         Some(Value::Array(a)) => a.clone(),
         Some(Value::String(s)) => {
@@ -893,7 +902,7 @@ fn arg_list(args: &JsonObject, key: &str) -> Vec<Value> {
     }
 }
 
-fn req_str(args: &JsonObject, key: &str) -> Result<String, ToolError> {
+pub(crate) fn req_str(args: &JsonObject, key: &str) -> Result<String, ToolError> {
     arg_str(args, key)
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| ToolError::Invalid(format!("{key} is required")))
@@ -1580,6 +1589,7 @@ pub(crate) fn run_tool(ctx: &ToolContext, name: &str, args: &JsonObject) -> Resu
         "set_notes" => Ok((ctx.call("set_notes", json!({ "text": arg_str(args, "text").unwrap_or_default() }))?, true)),
         "get_loadouts" => read(ctx.call("get_loadouts", Value::Null)?),
         "select_loadout" => stats(ctx.call("select_loadout", json!({ "name": req_str(args, "name")? }))?),
+        lab if crate::lab_tools::NAMES.contains(&lab) => crate::lab_tools::run(ctx, lab, args),
         other => Err(ToolError::Invalid(format!("unknown tool {other}"))),
     }
 }
@@ -1610,7 +1620,7 @@ mod tests {
     #[test]
     fn registry_is_stable_and_measured() {
         let d = defs(Game::Poe2);
-        assert_eq!(d.len(), 77, "tool count changed");
+        assert_eq!(d.len(), 83, "tool count changed");
 
         let mut names: Vec<&str> = d.iter().map(|t| t.name).collect();
         names.sort_unstable();

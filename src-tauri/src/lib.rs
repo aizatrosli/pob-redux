@@ -7,6 +7,7 @@ mod game_data;
 mod tree_art;
 mod mcp;
 mod tools;
+mod lab_tools;
 mod library;
 mod ai;
 mod agent;

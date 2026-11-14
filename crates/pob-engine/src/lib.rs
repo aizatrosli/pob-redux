@@ -11,6 +11,7 @@
 mod cache;
 mod engine;
 mod native;
+pub mod lab;
 pub mod pool;
 mod pool_sync;
 mod worker;
