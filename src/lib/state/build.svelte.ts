@@ -26,7 +26,10 @@ export function autosaveKey() {
   return game.isPoe2 ? AUTOSAVE_KEY : `${AUTOSAVE_KEY}:${game.current}`;
 }
 
-export type ViewId = "overview" | "tree" | "skills" | "items" | "calcs" | "config" | "notes" | "party" | "optimise" | "compare" | "import";
+export type ViewId = "overview" | "tree" | "skills" | "items" | "calcs" | "config" | "notes" | "party" | "optimise" | "compare" | "graph" | "import";
+
+/** Views that work with no build open. */
+export const BUILDLESS_VIEWS: readonly ViewId[] = ["import", "graph"];
 
 /**
  * The one live build. Mutations go through the engine and then re-pull the

@@ -15,6 +15,7 @@
   import PartyView from "$lib/views/PartyView.svelte";
   import OptimiseView from "$lib/views/OptimiseView.svelte";
   import CompareView from "$lib/views/CompareView.svelte";
+  import GraphView from "$lib/views/GraphView.svelte";
   import ImportView from "$lib/views/ImportView.svelte";
   import SettingsView from "$lib/views/SettingsView.svelte";
   import ConfirmModal from "$lib/components/ConfirmModal.svelte";
@@ -129,6 +130,8 @@
         <OptimiseView />
       {:else if build.view === "compare"}
         <CompareView />
+      {:else if build.view === "graph"}
+        <GraphView />
       {:else}
         <ImportView {paths} />
       {/if}

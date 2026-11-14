@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { engine, listBuilds, type BuildEntry, type ConfigOption, type ItemInfo } from "$lib/engine.svelte";
-  import { build, type ViewId } from "$lib/state/build.svelte";
+  import { build, BUILDLESS_VIEWS, type ViewId } from "$lib/state/build.svelte";
   import { ui, type Jump } from "$lib/state/ui.svelte";
   import { chat } from "$lib/state/chat.svelte";
   import { appOptions } from "$lib/state/options.svelte";
@@ -129,9 +129,10 @@
       ["party", m.view_party(), "8"],
       ["optimise", m.view_optimise(), "9"],
       ["compare", m.view_compare(), "0"],
+      ["graph", m.view_graph(), ""],
     ];
     return all
-      .filter(([id]) => build.loaded || id === "import")
+      .filter(([id]) => build.loaded || BUILDLESS_VIEWS.includes(id))
       .map(([id, label, key]) => ({ id: `view-${id}`, group: g, label, keys: key ? `Mod+${key}` : undefined, run: () => goTo(id) }));
   });
 
