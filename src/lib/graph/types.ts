@@ -58,6 +58,11 @@ export interface ChainMeasured {
   typical_n?: number;
   /** Chain DPS over the stronger of its own baseline and typical_dps. */
   gain_fair?: number;
+  /** Support gems the search socketed on the main skill in the chain build, and in the plain build. */
+  supports?: string[];
+  base_supports?: string[];
+  /** The main skill comes from an item, which the search does not give support gems. */
+  main_granted?: boolean;
   /** Fewer than 3 plain builds exist for the skill, so the comparison rests on little. */
   thin?: boolean;
   /** DPS with the chain's own states switched on over the same build with them off. */

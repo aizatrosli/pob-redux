@@ -317,6 +317,10 @@
     if (mm.thin) out.push(m.graph_measured_thin({ n: mm.typical_n ?? 1 }));
     if (mm.state_lift != null && Math.abs(mm.state_lift - 1) > 0.005) out.push(m.graph_measured_state({ lift: times(mm.state_lift), gain: times(mm.gain_credited ?? 0) }));
     else if (mm.state_lift != null) out.push(m.graph_measured_state_none());
+    if (mm.supports) {
+      out.push(mm.supports.length ? m.graph_measured_supports({ list: mm.supports.join(", ") }) : mm.main_granted ? m.graph_measured_supports_granted() : m.graph_measured_supports_none());
+      if (mm.base_supports && mm.base_supports.join("|") !== mm.supports.join("|")) out.push(m.graph_measured_supports_base({ list: mm.base_supports.join(", ") || m.graph_measured_supports_zero() }));
+    }
     if (!mm.feasible) out.push(m.graph_measured_infeasible());
     return out;
   }
@@ -714,6 +718,7 @@
                 <span class="grow"></span>
                 {#if c.tempo && c.tempo.tempo < 1}<span class="tag cut" title={factorsLine(c)}>×{c.tempo.tempo.toFixed(2)}</span>{/if}
                 {#if c.measured}{@const t = measuredTag(c.measured)}<span class="tag pob" class:good={t.tone === "good"} class:bad={t.tone === "bad"} title={m.graph_measured_tag_title()}>{t.text}</span>{/if}
+                {#if c.measured?.supports && c.measured.dps > 0}<span class="tag" class:cut={c.measured.supports.length === 0} title={c.measured.supports.join(", ") || m.graph_measured_supports_none()}>{m.graph_supports_tag({ n: c.measured.supports.length })}</span>{/if}
                 {#if c.predicted && !c.measured}<span class="tag" title={m.graph_predicted_tag_title()}>{m.graph_predicted_tag({ gain: times(c.predicted.score) })}</span>{/if}
                 {#if c.leveling}<span class="tag" class:cut={c.leveling.unobtainable || c.leveling.farm.length > 0} title={m.graph_level_tag_title({ level: c.leveling.online_level })}>{m.graph_level_tag({ level: c.leveling.online_level })}</span>{/if}
                 <span class="mono small" title={m.graph_chain_score_title()}>{c.score.toFixed(2)}</span>
