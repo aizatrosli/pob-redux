@@ -17,6 +17,7 @@ export interface GateCheck {
     | "budget"
     | "leveling"
     | "measured"
+    | "fitted"
     | "matches";
   status: CheckStatus;
   values?: Record<string, string | number>;
@@ -64,6 +65,7 @@ export function matchingChains(doc: GraphDoc | null, req: GraphRequirements): Gr
       });
   const kept = chains.filter((c) => chainMatches(c, req, doc) && levelingMatches(c, req));
   if (req.rank_by === "measured") return [...kept].sort((a, b) => measuredOrder(a) - measuredOrder(b) || b.score - a.score).slice(0, req.top);
+  if (req.rank_by === "fitted" && kept.some((c) => c.predicted)) return [...kept].sort((a, b) => (b.predicted?.score ?? -1) - (a.predicted?.score ?? -1) || b.score - a.score).slice(0, req.top);
   const fileByFormula = (doc.requirements.rank_by ?? "formula") === "formula";
   return (same && fileByFormula ? kept : [...kept].sort((a, b) => b.score - a.score)).slice(0, req.top);
 }
@@ -131,6 +133,9 @@ export function gate(doc: GraphDoc | null, req: GraphRequirements, game: string,
     status: wantMeasured ? (scored ? ((file.rank_by ?? "formula") === "measured" ? "ok" : "warn") : "fail") : "ok",
     values: { scored, on: wantMeasured ? 1 : 0 },
   });
+  const fitted = doc.mechanics?.chains.filter((c) => c.predicted).length ?? 0;
+  const wantFitted = req.rank_by === "fitted";
+  out.push({ id: "fitted", status: wantFitted && !fitted ? "fail" : "ok", values: { fitted, on: wantFitted ? 1 : 0 } });
   const n = matchingChains(doc, req).length;
   out.push({ id: "matches", status: n ? "ok" : "fail", values: { n } });
   return out;

@@ -2,7 +2,7 @@
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import GraphCanvas, { type DrawEdge, type DrawNode } from "$lib/graph/GraphCanvas.svelte";
   import { exportCommand, gate, gateOpen, matchingChains, type GateCheck } from "$lib/graph/requirements";
-  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type ChainMeasured, type LevelStep, type MeasuredSummary, type SkillTempo } from "$lib/graph/types";
+  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type ChainMeasured, type ChainPredicted, type LevelStep, type MeasuredSummary, type SkillTempo } from "$lib/graph/types";
   import { defaultLevelConfig, levelConfig } from "$lib/graph/leveling";
   import type { LevelConfig } from "$lib/graph/types";
   import { graph } from "$lib/state/graph.svelte";
@@ -103,6 +103,11 @@
         return {
           label: m.graph_gate_budget(),
           detail: ok ? m.graph_gate_budget_ok({ mana: v.mana, spirit: v.spirit }) : v.weighted ? m.graph_gate_budget_differs({ mana: v.mana, spirit: v.spirit }) : m.graph_gate_budget_missing(),
+        };
+      case "fitted":
+        return {
+          label: m.graph_gate_fitted(),
+          detail: c.status === "fail" ? m.graph_gate_fitted_missing() : Number(v.fitted) > 0 ? (v.on ? m.graph_gate_fitted_on({ n: v.fitted }) : m.graph_gate_fitted_have({ n: v.fitted })) : m.graph_gate_fitted_none(),
         };
       case "measured":
         return {
@@ -287,7 +292,7 @@
   const sums = $derived({
     build: [req.ascendancy ?? req.cls, ...req.damage_types, ...req.constraints.map((c) => constraintLabels[c] ?? c)].filter(Boolean).join(", ") || m.graph_sum_any(),
     items: [...req.uniques.map((u) => u.name), ...req.keystones, ...req.forbid_uniques.map((u) => m.graph_sum_not({ name: u }))].join(", ") || m.graph_sum_any(),
-    chains: [req.rank_by === "measured" ? m.graph_sum_measured() : "", ...req.chain_kinds.map((k) => kindLabels[k] ?? k), req.min_novelty > 0 ? m.graph_sum_novelty({ pct: pct(req.min_novelty) }) : ""].filter(Boolean).join(", ") || m.graph_sum_all(),
+    chains: [req.rank_by === "measured" ? m.graph_sum_measured() : req.rank_by === "fitted" ? m.graph_sum_fitted() : "", ...req.chain_kinds.map((k) => kindLabels[k] ?? k), req.min_novelty > 0 ? m.graph_sum_novelty({ pct: pct(req.min_novelty) }) : ""].filter(Boolean).join(", ") || m.graph_sum_all(),
     leveling: [req.leveling ? m.graph_sum_ranked() : m.graph_sum_off(), req.online_by > 0 ? m.graph_sum_by({ level: req.online_by }) : "", levelChanged ? m.graph_sum_custom() : ""].filter(Boolean).join(", "),
     budget: m.graph_sum_budget({ tier: req.budget_tier === "low" ? m.graph_budget_low() : req.budget_tier === "mid" ? m.graph_budget_mid() : m.graph_budget_high(), mana: req.mana_per_second, spirit: req.spirit }),
   });
@@ -300,10 +305,16 @@
     if (mm.gain_credited != null) return { text: m.graph_measured_tag({ gain: times(mm.gain_credited) }), tone: mm.gain_credited >= 1.1 ? "good" : mm.gain_credited <= 0.9 ? "bad" : "" };
     return mm.built && mm.dps > 0 ? { text: m.graph_measured_tag_built(), tone: "" } : { text: m.graph_measured_tag_failed(), tone: "bad" };
   }
+  function predictedLine(p: ChainPredicted): string {
+    const why = p.why.map((w) => `${w.part.replace(/^[a-z]+:/, "")} ${times(w.effect)}`).join(", ");
+    return m.graph_predicted_line({ gain: times(p.gain), works: pct(p.works) }) + (why ? ` · ${why}` : "");
+  }
   function measuredLines(mm: ChainMeasured): string[] {
     if (!mm.built) return [m.graph_measured_failed({ error: mm.error ?? "" })];
     if (!(mm.dps > 0)) return [m.graph_measured_no_dps()];
     const out = [mm.base_dps ? m.graph_measured_dps({ dps: whole(mm.dps), base: whole(mm.base_dps), gain: times(mm.gain ?? 0) }) : m.graph_measured_dps_only({ dps: whole(mm.dps) })];
+    if (mm.typical_dps && mm.gain_fair != null && mm.base_dps && mm.typical_dps > mm.base_dps) out.push(m.graph_measured_typical({ dps: whole(mm.typical_dps), n: mm.typical_n ?? 1, gain: times(mm.gain_fair) }));
+    if (mm.thin) out.push(m.graph_measured_thin({ n: mm.typical_n ?? 1 }));
     if (mm.state_lift != null && Math.abs(mm.state_lift - 1) > 0.005) out.push(m.graph_measured_state({ lift: times(mm.state_lift), gain: times(mm.gain_credited ?? 0) }));
     else if (mm.state_lift != null) out.push(m.graph_measured_state_none());
     if (!mm.feasible) out.push(m.graph_measured_infeasible());
@@ -555,7 +566,8 @@
       <div class="field">
         <span class="name">{m.graph_req_rank()}</span>
         <div class="chips">
-          <button class="btn sm" class:on={req.rank_by !== "measured"} aria-pressed={req.rank_by !== "measured"} onclick={() => graph.setReq({ rank_by: "formula" })}>{m.graph_rank_formula()}</button>
+          <button class="btn sm" class:on={req.rank_by !== "measured" && req.rank_by !== "fitted"} aria-pressed={req.rank_by !== "measured" && req.rank_by !== "fitted"} onclick={() => graph.setReq({ rank_by: "formula" })}>{m.graph_rank_formula()}</button>
+          <button class="btn sm" class:on={req.rank_by === "fitted"} aria-pressed={req.rank_by === "fitted"} onclick={() => graph.setReq({ rank_by: "fitted" })}>{m.graph_rank_fitted()}</button>
           <button class="btn sm" class:on={req.rank_by === "measured"} aria-pressed={req.rank_by === "measured"} onclick={() => graph.setReq({ rank_by: "measured" })}>{m.graph_rank_measured()}</button>
         </div>
         <span class="dim small">{m.graph_req_rank_hint()}</span>
@@ -702,6 +714,7 @@
                 <span class="grow"></span>
                 {#if c.tempo && c.tempo.tempo < 1}<span class="tag cut" title={factorsLine(c)}>×{c.tempo.tempo.toFixed(2)}</span>{/if}
                 {#if c.measured}{@const t = measuredTag(c.measured)}<span class="tag pob" class:good={t.tone === "good"} class:bad={t.tone === "bad"} title={m.graph_measured_tag_title()}>{t.text}</span>{/if}
+                {#if c.predicted && !c.measured}<span class="tag" title={m.graph_predicted_tag_title()}>{m.graph_predicted_tag({ gain: times(c.predicted.score) })}</span>{/if}
                 {#if c.leveling}<span class="tag" class:cut={c.leveling.unobtainable || c.leveling.farm.length > 0} title={m.graph_level_tag_title({ level: c.leveling.online_level })}>{m.graph_level_tag({ level: c.leveling.online_level })}</span>{/if}
                 <span class="mono small" title={m.graph_chain_score_title()}>{c.score.toFixed(2)}</span>
               </div>
@@ -713,6 +726,7 @@
                   {#each c.tempo.helpers as h (h.id)}<div class="small mono">{h.name}: {tempoLine(h)}</div>{/each}
                   {#if c.tempo.tempo < 1}<div class="small warnline">{factorsLine(c)}</div>{/if}
                 {/if}
+                {#if c.predicted}<div class="small mono pobline">{predictedLine(c.predicted)}</div>{/if}
                 {#if c.measured}
                   {#each measuredLines(c.measured) as line (line)}<div class="small mono pobline">{line}</div>{/each}
                 {/if}

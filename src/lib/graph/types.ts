@@ -26,8 +26,20 @@ export interface GraphRequirements {
   online_by: number;
   /** Overrides of the leveling defaults: trial levels, boss level, scoring thresholds, quest schedule. */
   leveling_config: Partial<LevelConfig>;
-  /** "formula" ranks by the score; "measured" puts chains with the highest PoB-measured gain first. */
-  rank_by: "formula" | "measured";
+  /** "formula" ranks by the score; "measured" puts chains with the highest PoB-measured gain first; "fitted" ranks by the score fitted to PoB runs. */
+  rank_by: "formula" | "measured" | "fitted";
+}
+
+/** The score fitted to PoB measurements (exilegen chainfit): what adding the chain is expected to do. */
+export interface ChainPredicted {
+  /** Chance the chain turns into a build with damage, 0 to 1. */
+  works: number;
+  /** Expected DPS multiple over the plain build when it does. */
+  gain: number;
+  /** works × gain. */
+  score: number;
+  /** The parts and traits that move the prediction most, as multiples. */
+  why: { part: string; effect: number }[];
 }
 
 /** What PoB said when the chain was built for real (exilegen chainscore). */
@@ -41,12 +53,19 @@ export interface ChainMeasured {
   base_dps?: number;
   /** Chain DPS over baseline DPS, with every conditional state off. */
   gain?: number;
+  /** Median DPS of the plain builds on the same main skill, over typical_n builds. */
+  typical_dps?: number;
+  typical_n?: number;
+  /** Chain DPS over the stronger of its own baseline and typical_dps. */
+  gain_fair?: number;
+  /** Fewer than 3 plain builds exist for the skill, so the comparison rests on little. */
+  thin?: boolean;
   /** DPS with the chain's own states switched on over the same build with them off. */
   state_lift?: number;
   base_state_lift?: number;
   /** state_lift over the baseline's: above 1 means the chain's payoff part uses the state better. */
   payoff?: number;
-  /** gain × state_lift: the chain credited for the state it produces, assuming it is always up. */
+  /** gain_fair × state_lift: the chain credited for the state it produces, assuming it is always up. */
   gain_credited?: number;
   error?: string;
 }
@@ -201,6 +220,7 @@ export interface GraphChain {
   tempo?: ChainTempo;
   leveling?: ChainLeveling;
   measured?: ChainMeasured;
+  predicted?: ChainPredicted;
   formula_rank?: number;
   thesis: string;
   evidence: string[];
