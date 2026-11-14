@@ -16,6 +16,7 @@ export interface GateCheck {
     | "scope_uniques"
     | "budget"
     | "leveling"
+    | "measured"
     | "matches";
   status: CheckStatus;
   values?: Record<string, string | number>;
@@ -62,7 +63,17 @@ export function matchingChains(doc: GraphDoc | null, req: GraphRequirements): Gr
         return { ...c, leveling: path, score: req.leveling ? plain * path.factor : plain };
       });
   const kept = chains.filter((c) => chainMatches(c, req, doc) && levelingMatches(c, req));
-  return (same ? kept : kept.sort((a, b) => b.score - a.score)).slice(0, req.top);
+  if (req.rank_by === "measured") return [...kept].sort((a, b) => measuredOrder(a) - measuredOrder(b) || b.score - a.score).slice(0, req.top);
+  const fileByFormula = (doc.requirements.rank_by ?? "formula") === "formula";
+  return (same && fileByFormula ? kept : [...kept].sort((a, b) => b.score - a.score)).slice(0, req.top);
+}
+
+/** Chains with a measured gain first (highest first), then built ones, then unmeasured, then failed builds. */
+function measuredOrder(c: GraphChain): number {
+  const m = c.measured;
+  if (m?.gain_credited != null) return -m.gain_credited;
+  if (m?.built) return 1e6 - Math.min(m.dps, 9e5);
+  return m ? 3e6 : 2e6;
 }
 
 function levelingMatches(c: GraphChain, req: GraphRequirements): boolean {
@@ -112,6 +123,13 @@ export function gate(doc: GraphDoc | null, req: GraphRequirements, game: string,
     id: "leveling",
     status: !leveled ? (wanted ? "fail" : "warn") : !!file.leveling === req.leveling && sameLevelConfig(file.leveling_config, req.leveling_config) ? "ok" : "warn",
     values: { leveled: leveled ? 1 : 0, on: req.leveling ? 1 : 0, by: req.online_by },
+  });
+  const scored = doc.mechanics?.chains.filter((c) => c.measured).length ?? 0;
+  const wantMeasured = req.rank_by === "measured";
+  out.push({
+    id: "measured",
+    status: wantMeasured ? (scored ? ((file.rank_by ?? "formula") === "measured" ? "ok" : "warn") : "fail") : "ok",
+    values: { scored, on: wantMeasured ? 1 : 0 },
   });
   const n = matchingChains(doc, req).length;
   out.push({ id: "matches", status: n ? "ok" : "fail", values: { n } });

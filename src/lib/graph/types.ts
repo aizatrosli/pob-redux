@@ -26,6 +26,40 @@ export interface GraphRequirements {
   online_by: number;
   /** Overrides of the leveling defaults: trial levels, boss level, scoring thresholds, quest schedule. */
   leveling_config: Partial<LevelConfig>;
+  /** "formula" ranks by the score; "measured" puts chains with the highest PoB-measured gain first. */
+  rank_by: "formula" | "measured";
+}
+
+/** What PoB said when the chain was built for real (exilegen chainscore). */
+export interface ChainMeasured {
+  built: boolean;
+  feasible: boolean;
+  unverified: boolean;
+  /** Honest DPS of the chain build, and of the same setup built without the chain. */
+  dps: number;
+  ehp?: number | null;
+  base_dps?: number;
+  /** Chain DPS over baseline DPS, with every conditional state off. */
+  gain?: number;
+  /** DPS with the chain's own states switched on over the same build with them off. */
+  state_lift?: number;
+  base_state_lift?: number;
+  /** state_lift over the baseline's: above 1 means the chain's payoff part uses the state better. */
+  payoff?: number;
+  /** gain × state_lift: the chain credited for the state it produces, assuming it is always up. */
+  gain_credited?: number;
+  error?: string;
+}
+
+export interface MeasuredSummary {
+  scored: number;
+  pool: number;
+  built: number;
+  feasible: number;
+  compared: number;
+  median_gain: number | null;
+  better_by_10pct: number;
+  worse_by_10pct: number;
 }
 
 export interface LevelConfig {
@@ -166,6 +200,8 @@ export interface GraphChain {
   score_raw?: number;
   tempo?: ChainTempo;
   leveling?: ChainLeveling;
+  measured?: ChainMeasured;
+  formula_rank?: number;
   thesis: string;
   evidence: string[];
 }
@@ -226,5 +262,6 @@ export function defaultRequirements(): GraphRequirements {
     leveling: false,
     online_by: 0,
     leveling_config: {},
+    rank_by: "formula",
   };
 }

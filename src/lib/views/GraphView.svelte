@@ -2,7 +2,7 @@
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import GraphCanvas, { type DrawEdge, type DrawNode } from "$lib/graph/GraphCanvas.svelte";
   import { exportCommand, gate, gateOpen, matchingChains, type GateCheck } from "$lib/graph/requirements";
-  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type LevelStep, type SkillTempo } from "$lib/graph/types";
+  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type ChainMeasured, type LevelStep, type MeasuredSummary, type SkillTempo } from "$lib/graph/types";
   import { defaultLevelConfig, levelConfig } from "$lib/graph/leveling";
   import type { LevelConfig } from "$lib/graph/types";
   import { graph } from "$lib/state/graph.svelte";
@@ -103,6 +103,11 @@
         return {
           label: m.graph_gate_budget(),
           detail: ok ? m.graph_gate_budget_ok({ mana: v.mana, spirit: v.spirit }) : v.weighted ? m.graph_gate_budget_differs({ mana: v.mana, spirit: v.spirit }) : m.graph_gate_budget_missing(),
+        };
+      case "measured":
+        return {
+          label: m.graph_gate_measured(),
+          detail: !v.on ? (Number(v.scored) > 0 ? m.graph_gate_measured_have({ n: v.scored }) : m.graph_gate_measured_none()) : c.status === "fail" ? m.graph_gate_measured_missing() : c.status === "warn" ? m.graph_gate_measured_reranked({ n: v.scored }) : m.graph_gate_measured_on({ n: v.scored }),
         };
       case "leveling":
         return {
@@ -282,10 +287,28 @@
   const sums = $derived({
     build: [req.ascendancy ?? req.cls, ...req.damage_types, ...req.constraints.map((c) => constraintLabels[c] ?? c)].filter(Boolean).join(", ") || m.graph_sum_any(),
     items: [...req.uniques.map((u) => u.name), ...req.keystones, ...req.forbid_uniques.map((u) => m.graph_sum_not({ name: u }))].join(", ") || m.graph_sum_any(),
-    chains: [...req.chain_kinds.map((k) => kindLabels[k] ?? k), req.min_novelty > 0 ? m.graph_sum_novelty({ pct: pct(req.min_novelty) }) : ""].filter(Boolean).join(", ") || m.graph_sum_all(),
+    chains: [req.rank_by === "measured" ? m.graph_sum_measured() : "", ...req.chain_kinds.map((k) => kindLabels[k] ?? k), req.min_novelty > 0 ? m.graph_sum_novelty({ pct: pct(req.min_novelty) }) : ""].filter(Boolean).join(", ") || m.graph_sum_all(),
     leveling: [req.leveling ? m.graph_sum_ranked() : m.graph_sum_off(), req.online_by > 0 ? m.graph_sum_by({ level: req.online_by }) : "", levelChanged ? m.graph_sum_custom() : ""].filter(Boolean).join(", "),
     budget: m.graph_sum_budget({ tier: req.budget_tier === "low" ? m.graph_budget_low() : req.budget_tier === "mid" ? m.graph_budget_mid() : m.graph_budget_high(), mana: req.mana_per_second, spirit: req.spirit }),
   });
+
+  const measuredInfo = $derived((doc?.mechanics?.info?.measured as MeasuredSummary | undefined) ?? null);
+  const times = (x: number) => `×${x.toFixed(2)}`;
+  const whole = (x: number) => Math.round(x).toLocaleString();
+  /** The number shown on a chain row: the credited gain, or a mark that the build failed. */
+  function measuredTag(mm: ChainMeasured): { text: string; tone: "good" | "bad" | "" } {
+    if (mm.gain_credited != null) return { text: m.graph_measured_tag({ gain: times(mm.gain_credited) }), tone: mm.gain_credited >= 1.1 ? "good" : mm.gain_credited <= 0.9 ? "bad" : "" };
+    return mm.built && mm.dps > 0 ? { text: m.graph_measured_tag_built(), tone: "" } : { text: m.graph_measured_tag_failed(), tone: "bad" };
+  }
+  function measuredLines(mm: ChainMeasured): string[] {
+    if (!mm.built) return [m.graph_measured_failed({ error: mm.error ?? "" })];
+    if (!(mm.dps > 0)) return [m.graph_measured_no_dps()];
+    const out = [mm.base_dps ? m.graph_measured_dps({ dps: whole(mm.dps), base: whole(mm.base_dps), gain: times(mm.gain ?? 0) }) : m.graph_measured_dps_only({ dps: whole(mm.dps) })];
+    if (mm.state_lift != null && Math.abs(mm.state_lift - 1) > 0.005) out.push(m.graph_measured_state({ lift: times(mm.state_lift), gain: times(mm.gain_credited ?? 0) }));
+    else if (mm.state_lift != null) out.push(m.graph_measured_state_none());
+    if (!mm.feasible) out.push(m.graph_measured_infeasible());
+    return out;
+  }
 
   function stepLine(s: LevelStep): string {
     if (!s.known) return m.graph_level_unknown();
@@ -530,6 +553,14 @@
     <details class="group" open={groupOpen.chains} ontoggle={(e) => (groupOpen.chains = e.currentTarget.open)}>
       <summary><span class="gname">{m.graph_group_chains()}</span><span class="gsum">{sums.chains}</span></summary>
       <div class="field">
+        <span class="name">{m.graph_req_rank()}</span>
+        <div class="chips">
+          <button class="btn sm" class:on={req.rank_by !== "measured"} aria-pressed={req.rank_by !== "measured"} onclick={() => graph.setReq({ rank_by: "formula" })}>{m.graph_rank_formula()}</button>
+          <button class="btn sm" class:on={req.rank_by === "measured"} aria-pressed={req.rank_by === "measured"} onclick={() => graph.setReq({ rank_by: "measured" })}>{m.graph_rank_measured()}</button>
+        </div>
+        <span class="dim small">{m.graph_req_rank_hint()}</span>
+      </div>
+      <div class="field">
         <span class="name">{m.graph_req_kinds()}</span>
         <div class="chips">
           {#each CHAIN_KINDS as k (k)}
@@ -656,6 +687,12 @@
       {/if}
       {#if mode === "mechanics"}
         <div class="label pad">{m.graph_chains({ n: listedChains.length })}</div>
+        {#if measuredInfo}
+          <div class="small dim pad measured-line">
+            {m.graph_measured_progress({ scored: measuredInfo.scored, pool: measuredInfo.pool })}
+            {#if measuredInfo.compared}{m.graph_measured_summary({ better: measuredInfo.better_by_10pct, worse: measuredInfo.worse_by_10pct, compared: measuredInfo.compared })}{/if}
+          </div>
+        {/if}
         <div class="list">
           {#each listedChains as c (c.id)}
             <button class="item" class:on={pickedChain === c.id} onclick={() => pickChain(c)}>
@@ -664,6 +701,7 @@
                 <span class="tag">{kindLabels[c.kind] ?? c.kind}</span>
                 <span class="grow"></span>
                 {#if c.tempo && c.tempo.tempo < 1}<span class="tag cut" title={factorsLine(c)}>×{c.tempo.tempo.toFixed(2)}</span>{/if}
+                {#if c.measured}{@const t = measuredTag(c.measured)}<span class="tag pob" class:good={t.tone === "good"} class:bad={t.tone === "bad"} title={m.graph_measured_tag_title()}>{t.text}</span>{/if}
                 {#if c.leveling}<span class="tag" class:cut={c.leveling.unobtainable || c.leveling.farm.length > 0} title={m.graph_level_tag_title({ level: c.leveling.online_level })}>{m.graph_level_tag({ level: c.leveling.online_level })}</span>{/if}
                 <span class="mono small" title={m.graph_chain_score_title()}>{c.score.toFixed(2)}</span>
               </div>
@@ -674,6 +712,9 @@
                   <div class="small mono">{c.main_name}: {tempoLine(c.tempo.main)}</div>
                   {#each c.tempo.helpers as h (h.id)}<div class="small mono">{h.name}: {tempoLine(h)}</div>{/each}
                   {#if c.tempo.tempo < 1}<div class="small warnline">{factorsLine(c)}</div>{/if}
+                {/if}
+                {#if c.measured}
+                  {#each measuredLines(c.measured) as line (line)}<div class="small mono pobline">{line}</div>{/each}
                 {/if}
                 {#if c.leveling}
                   <div class="small dim">{m.graph_level_summary({ start: c.leveling.start_level, online: c.leveling.online_level, factor: c.leveling.factor.toFixed(2) })}</div>
@@ -1066,6 +1107,20 @@
   }
   .tag.cut {
     border-color: currentColor;
+  }
+  .tag.pob.good {
+    color: var(--ok);
+    border-color: currentColor;
+  }
+  .tag.pob.bad {
+    color: var(--bad);
+    border-color: currentColor;
+  }
+  .pobline {
+    color: var(--fg-0);
+  }
+  .measured-line {
+    padding-top: 0;
   }
   .num {
     width: 64px;
