@@ -3,12 +3,33 @@
   import GraphCanvas, { type DrawEdge, type DrawNode } from "$lib/graph/GraphCanvas.svelte";
   import { exportCommand, gate, gateOpen, matchingChains, type GateCheck } from "$lib/graph/requirements";
   import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type LevelStep, type SkillTempo } from "$lib/graph/types";
+  import { defaultLevelConfig, levelConfig } from "$lib/graph/leveling";
+  import type { LevelConfig } from "$lib/graph/types";
   import { graph } from "$lib/state/graph.svelte";
   import { build } from "$lib/state/build.svelte";
   import { game } from "$lib/state/game.svelte";
   import { m } from "$lib/paraglide/messages";
 
   const req = $derived(graph.req);
+  const levelCfg = $derived(levelConfig(req.leveling_config));
+  const levelChanged = $derived(Object.keys(req.leveling_config ?? {}).length > 0);
+  let levelOpen = $state(false);
+
+  /** Keep only the settings that differ from the defaults, so the request stays small and follows new defaults. */
+  function setLevel(patch: Partial<LevelConfig>) {
+    const base = defaultLevelConfig();
+    const next = { ...levelCfg, ...patch };
+    // keep the trial levels rising and the scoring range valid
+    next.trial_levels = next.trial_levels.map((x, i, all) => Math.max(x, ...all.slice(0, i)));
+    if (next.late_level <= next.early_level) next.late_level = Math.min(100, next.early_level + 1);
+    const diff: Partial<LevelConfig> = {};
+    for (const k of Object.keys(base) as (keyof LevelConfig)[]) {
+      if (JSON.stringify(next[k]) !== JSON.stringify(base[k])) (diff as Record<string, unknown>)[k] = next[k];
+    }
+    graph.setReq({ leveling_config: diff });
+  }
+  const lvl = (e: Event, lo = 1, hi = 100) => Math.min(hi, Math.max(lo, Math.round(Number((e.currentTarget as HTMLInputElement).value) || lo)));
+  const pctIn = (e: Event) => Math.min(100, Math.max(1, Math.round(Number((e.currentTarget as HTMLInputElement).value) || 1))) / 100;
   const doc = $derived(graph.doc);
   const checks = $derived(gate(doc, req, game.current));
   const open = $derived(gateOpen(checks));
@@ -536,6 +557,39 @@
         <span class="dim small">{m.graph_req_online_by()}</span>
       </div>
       <span class="dim small">{m.graph_req_leveling_hint()}</span>
+      <div class="chips">
+        <button class="btn sm" class:on={levelOpen} aria-expanded={levelOpen} onclick={() => (levelOpen = !levelOpen)}>{levelChanged ? m.graph_level_settings_changed() : m.graph_level_settings()}</button>
+        {#if levelChanged}<button class="btn sm" onclick={() => graph.setReq({ leveling_config: {} })}>{m.graph_level_reset()}</button>{/if}
+      </div>
+      {#if levelOpen}
+        <span class="dim small">{m.graph_level_trials()}</span>
+        <div class="chips">
+          {#each levelCfg.trial_levels as t, i (i)}
+            <input class="input num" type="number" min="1" max="100" value={t} aria-label={m.graph_level_trial_n({ n: i + 1 })} title={m.graph_level_trial_n({ n: i + 1 })} onchange={(e) => setLevel({ trial_levels: levelCfg.trial_levels.map((x, j) => (j === i ? lvl(e) : x)) })} />
+          {/each}
+        </div>
+        <div class="chips">
+          <input class="input num" type="number" min="1" max="100" value={levelCfg.boss_level} aria-label={m.graph_level_boss_level()} onchange={(e) => setLevel({ boss_level: lvl(e) })} />
+          <span class="dim small">{m.graph_level_boss_level()}</span>
+        </div>
+        <div class="chips">
+          <input class="input num" type="number" min="1" max="99" value={levelCfg.early_level} aria-label={m.graph_level_early()} onchange={(e) => setLevel({ early_level: lvl(e, 1, 99) })} />
+          <span class="dim small">{m.graph_level_early()}</span>
+        </div>
+        <div class="chips">
+          <input class="input num" type="number" min="2" max="100" value={levelCfg.late_level} aria-label={m.graph_level_late()} onchange={(e) => setLevel({ late_level: lvl(e, 2) })} />
+          <span class="dim small">{m.graph_level_late()}</span>
+        </div>
+        <div class="chips">
+          <input class="input num" type="number" min="1" max="100" value={Math.round(levelCfg.late_factor * 100)} aria-label={m.graph_level_late_factor()} onchange={(e) => setLevel({ late_factor: pctIn(e) })} />
+          <span class="dim small">{m.graph_level_late_factor()}</span>
+        </div>
+        <div class="chips">
+          <input class="input num" type="number" min="1" max="100" value={Math.round(levelCfg.boss_factor * 100)} aria-label={m.graph_level_boss_factor()} onchange={(e) => setLevel({ boss_factor: pctIn(e) })} />
+          <span class="dim small">{m.graph_level_boss_factor()}</span>
+        </div>
+        <span class="dim small">{m.graph_level_settings_hint()}</span>
+      {/if}
     </div>
 
     <div class="field">

@@ -24,6 +24,28 @@ export interface GraphRequirements {
   leveling: boolean;
   /** Hide chains that are not complete by this character level. 0 means no limit. */
   online_by: number;
+  /** Overrides of the leveling defaults: trial levels, boss level, scoring thresholds, quest schedule. */
+  leveling_config: Partial<LevelConfig>;
+}
+
+export interface LevelConfig {
+  /** Character level at which each of the four ascendancy trials is done. */
+  trial_levels: number[];
+  /** Character level → passive points from campaign quests held by then. */
+  quest_passive_points: Record<string, number>;
+  /** Character level → Spirit from campaign quests held by then. */
+  quest_spirit: Record<string, number>;
+  /** Level at which boss-only uniques can be farmed. */
+  boss_level: number;
+  /** A chain complete by here keeps its full score. */
+  early_level: number;
+  /** A chain complete only here gets `late_factor`. */
+  late_level: number;
+  late_factor: number;
+  /** Score multiplier per boss-only unique, never below `farm_floor`. */
+  boss_factor: number;
+  farm_floor: number;
+  max_level: number;
 }
 
 export type CheckStatus = "ok" | "warn" | "fail";
@@ -57,6 +79,8 @@ export interface LevelStep {
   kind: "skill" | "unique" | "keystone" | "asc" | "spirit";
   name: string;
   level: number;
+  /** The item's own level requirement, before the boss level is applied. */
+  item_level?: number;
   gate: "gem" | "base" | "item" | "drop" | "boss" | "unobtainable" | "passives" | "ascendancy" | "spirit" | "spirit_gear";
   known: boolean;
   main?: boolean;
@@ -201,5 +225,6 @@ export function defaultRequirements(): GraphRequirements {
     spirit: 200,
     leveling: false,
     online_by: 0,
+    leveling_config: {},
   };
 }

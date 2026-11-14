@@ -1,3 +1,4 @@
+import { levelConfig, sameLevelConfig, settle } from "./leveling";
 import { GRAPH_FORMAT, GRAPH_VERSION, type CheckStatus, type GraphChain, type GraphDoc, type GraphRequirements } from "./types";
 
 /** One line of the gate. `id` picks the label; `values` fill its detail message. */
@@ -48,17 +49,20 @@ export function chainMatches(c: GraphChain, req: GraphRequirements, doc: GraphDo
 
 export function matchingChains(doc: GraphDoc | null, req: GraphRequirements): GraphChain[] {
   if (!doc?.mechanics) return [];
+  // Leveling is settled here under the request's settings, whatever the file was exported with.
+  const cfg = levelConfig(req.leveling_config);
   const inFile = !!doc.requirements.leveling;
-  const kept = doc.mechanics.chains.filter((c) => chainMatches(c, req, doc) && levelingMatches(c, req));
-  if (inFile === req.leveling) return kept.slice(0, req.top);
-  // The file was ranked the other way: put the leveling factor on, or take it off, and sort again.
-  return kept
-    .map((c) => {
-      const f = c.leveling?.factor ?? 1;
-      return { ...c, score: req.leveling ? c.score * f : f > 0 ? c.score / f : c.score };
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, req.top);
+  const same = inFile === req.leveling && sameLevelConfig(doc.requirements.leveling_config, req.leveling_config);
+  const chains = same
+    ? doc.mechanics.chains
+    : doc.mechanics.chains.map((c) => {
+        if (!c.leveling) return c;
+        const path = settle(c.leveling, cfg);
+        const plain = inFile ? (c.leveling.factor > 0 ? c.score / c.leveling.factor : 0) : c.score;
+        return { ...c, leveling: path, score: req.leveling ? plain * path.factor : plain };
+      });
+  const kept = chains.filter((c) => chainMatches(c, req, doc) && levelingMatches(c, req));
+  return (same ? kept : kept.sort((a, b) => b.score - a.score)).slice(0, req.top);
 }
 
 function levelingMatches(c: GraphChain, req: GraphRequirements): boolean {
@@ -106,7 +110,7 @@ export function gate(doc: GraphDoc | null, req: GraphRequirements, game: string,
   const wanted = req.leveling || req.online_by > 0;
   out.push({
     id: "leveling",
-    status: !leveled ? (wanted ? "fail" : "warn") : !!file.leveling === req.leveling ? "ok" : "warn",
+    status: !leveled ? (wanted ? "fail" : "warn") : !!file.leveling === req.leveling && sameLevelConfig(file.leveling_config, req.leveling_config) ? "ok" : "warn",
     values: { leveled: leveled ? 1 : 0, on: req.leveling ? 1 : 0, by: req.online_by },
   });
   const n = matchingChains(doc, req).length;
