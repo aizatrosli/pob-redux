@@ -63,6 +63,11 @@ export const ALLOWED = new Set([
   "set_item_variant",
   "craft_rare",
   "optimise_gear",
+  // Whole-build search through the exilegen sidecar. It checkpoints before it
+  // opens a result, so rollback undoes it; the meta-search reads change nothing.
+  "optimise_build",
+  "meta_search_status",
+  "meta_search_results",
   "set_gem_levels",
   "unequip_item",
   "set_flask_active",

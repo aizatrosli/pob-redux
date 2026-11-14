@@ -7,6 +7,8 @@
 //!   pobctl --pob-root <dir> stats path/to/build.xml
 //!   pobctl --pob-root <dir> bench
 //!   pobctl --pob-root <dir> serve --workers 4 --timeout 30
+//!   pobctl --pob-root <dir> optimise build.code --constraint one_button
+//!   pobctl --pob-root <dir> meta-search start overnight --minutes 480
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -15,6 +17,8 @@ use clap::{Parser, Subcommand};
 use pob_engine::{Engine, EngineConfig};
 use serde_json::{json, Value};
 
+#[path = "pobctl/lab.rs"]
+mod lab;
 #[path = "pobctl/serve.rs"]
 mod serve;
 
@@ -166,6 +170,30 @@ enum Cmd {
     /// One `serve` worker.
     #[command(hide = true)]
     ServeWorker,
+    /// Optimise a build with exilegen (tree, supports, triggers) under honest scoring; prints JSON.
+    /// Needs Python and an exilegen checkout (POB_LAB_EXILEGEN); lab state in $POB_LAB_DIR or <user dir>/lab.
+    Optimise {
+        /// File holding a PoB share code, or - for stdin.
+        file: PathBuf,
+        /// auto, or a comma list of convert,tree,tree_scratch,supports,triggers.
+        #[arg(long)]
+        steps: Option<String>,
+        #[command(flatten)]
+        scoring: lab::Scoring,
+    },
+    /// Build an idea from nothing with exilegen: a skeleton JSON such as
+    /// {"cls":"Witch","ascendancy":"Lich","main_skill":"SparkPlayer","uniques":["Liminal Coil"]}; prints JSON.
+    Synth {
+        /// Skeleton JSON, or @file.
+        skeleton: String,
+        #[command(flatten)]
+        scoring: lab::Scoring,
+    },
+    /// From-scratch meta search (exilegen's MAP-Elites builder) in a named run directory.
+    MetaSearch {
+        #[command(subcommand)]
+        cmd: lab::MetaSearch,
+    },
     /// Unique jewel suggestions: one engine vs the worker pool, with an equality check.
     Jewels {
         file: PathBuf,
@@ -832,6 +860,22 @@ fn main() {
     match &cli.cmd {
         Cmd::Serve { workers, timeout } => std::process::exit(serve::serve(&cfg, *workers, *timeout)),
         Cmd::ServeWorker => std::process::exit(serve::worker(cfg)),
+        Cmd::Optimise { .. } | Cmd::Synth { .. } | Cmd::MetaSearch { .. } => {
+            let out = match &cli.cmd {
+                Cmd::Optimise { file, steps, scoring } => lab::optimise(&cli.pob_root, &user_dir, file, steps.clone(), scoring),
+                Cmd::Synth { skeleton, scoring } => lab::synth(&cli.pob_root, &user_dir, skeleton, scoring),
+                Cmd::MetaSearch { cmd } => lab::meta_search(&cli.pob_root, &user_dir, cmd),
+                _ => unreachable!(),
+            };
+            match out {
+                Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         _ => {}
     }
 
@@ -948,7 +992,7 @@ fn main() {
                 Ok(json!({ "iterations": iterations, "avg_ms": avg, "min_ms": min, "boot_ms": engine.boot_ms }))
             }),
         Cmd::Eval { code } => engine.eval(&code),
-        Cmd::Power { .. } | Cmd::Gems { .. } | Cmd::Jewels { .. } | Cmd::Plan { .. } | Cmd::Corpus { .. } | Cmd::Golden { .. } | Cmd::Serve { .. } | Cmd::ServeWorker => {
+        Cmd::Power { .. } | Cmd::Gems { .. } | Cmd::Jewels { .. } | Cmd::Plan { .. } | Cmd::Corpus { .. } | Cmd::Golden { .. } | Cmd::Serve { .. } | Cmd::ServeWorker | Cmd::Optimise { .. } | Cmd::Synth { .. } | Cmd::MetaSearch { .. } => {
             unreachable!("handled above")
         }
     };
