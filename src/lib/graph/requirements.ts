@@ -13,6 +13,7 @@ export interface GateCheck {
     | "scope_damage"
     | "scope_constraints"
     | "scope_uniques"
+    | "budget"
     | "matches";
   status: CheckStatus;
   values?: Record<string, string | number>;
@@ -80,6 +81,10 @@ export function gate(doc: GraphDoc | null, req: GraphRequirements, game: string,
   const keys = names(doc, "keystone");
   const missing = [...req.uniques.map((u) => u.name).filter((u) => !known.has(u)), ...req.keystones.filter((k) => !keys.has(k))];
   out.push({ id: "scope_uniques", status: missing.length ? "fail" : "ok", values: { missing: missing.join(", ") } });
+  // the weights in the file were worked out for the file's budget
+  const weighted = doc.mechanics?.chains.some((c) => c.tempo) ?? false;
+  const sameBudget = file.mana_per_second === req.mana_per_second && file.spirit === req.spirit;
+  out.push({ id: "budget", status: weighted && sameBudget ? "ok" : "warn", values: { weighted: weighted ? 1 : 0, mana: file.mana_per_second ?? "?", spirit: file.spirit ?? "?" } });
   const n = matchingChains(doc, req).length;
   out.push({ id: "matches", status: n ? "ok" : "fail", values: { n } });
   return out;

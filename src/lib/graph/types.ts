@@ -17,6 +17,9 @@ export interface GraphRequirements {
   chain_kinds: string[];
   min_novelty: number;
   top: number;
+  /** Resource the build can spend each second, and Spirit it can reserve. Chains are weighted against both. */
+  mana_per_second: number;
+  spirit: number;
 }
 
 export type CheckStatus = "ok" | "warn" | "fail";
@@ -27,6 +30,31 @@ export interface GraphCheck {
   status: CheckStatus;
   label: string;
   detail: string;
+}
+
+/** What one skill costs to use, how long a use takes and how often it can be used (gem level 20). */
+export interface SkillTempo {
+  use_time: number;
+  cooldown: number;
+  stored_uses: number;
+  cost: Record<string, number>;
+  cost_per_second: number;
+  spirit: number;
+  persistent: boolean;
+  instant: boolean;
+  triggered: boolean;
+  /** Cost resources the budget does not price (Ward, Rage). */
+  unpriced: string[];
+}
+
+/** The 0..1 weight on a chain's score, and the four factors it is the product of. */
+export interface ChainTempo {
+  tempo: number;
+  factors: { resource: number; spirit: number; cooldown: number; time: number };
+  main: SkillTempo;
+  helpers: (SkillTempo & { id: string; name: string })[];
+  spirit_total: number;
+  cost_per_second: number;
 }
 
 export type NodeKind = "unique" | "keystone" | "asc" | "skill" | "util" | "token" | "M" | "A" | "S" | "U" | "K" | "AN" | "G";
@@ -41,6 +69,7 @@ export interface GraphNode {
   group?: string;
   kit?: number;
   n?: number;
+  tempo?: SkillTempo;
 }
 
 export interface GraphEdge {
@@ -68,7 +97,10 @@ export interface GraphChain {
   main_minion: boolean;
   fit: number;
   novelty: number;
+  /** Fit × novelty × tempo. */
   score: number;
+  score_raw?: number;
+  tempo?: ChainTempo;
   thesis: string;
   evidence: string[];
 }
@@ -124,5 +156,7 @@ export function defaultRequirements(): GraphRequirements {
     chain_kinds: [],
     min_novelty: 0,
     top: 150,
+    mana_per_second: 250,
+    spirit: 200,
   };
 }

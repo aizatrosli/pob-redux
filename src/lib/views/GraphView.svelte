@@ -2,7 +2,7 @@
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import GraphCanvas, { type DrawEdge, type DrawNode } from "$lib/graph/GraphCanvas.svelte";
   import { exportCommand, gate, gateOpen, matchingChains, type GateCheck } from "$lib/graph/requirements";
-  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit } from "$lib/graph/types";
+  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type SkillTempo } from "$lib/graph/types";
   import { graph } from "$lib/state/graph.svelte";
   import { build } from "$lib/state/build.svelte";
   import { game } from "$lib/state/game.svelte";
@@ -79,6 +79,11 @@
         return { label: m.graph_gate_scope_constraints(), detail: ok ? m.graph_gate_scope_ok() : m.graph_gate_scope_bad({ file: String(v.file) }) };
       case "scope_uniques":
         return { label: m.graph_gate_scope_uniques(), detail: ok ? m.graph_gate_scope_ok() : m.graph_gate_scope_uniques_bad({ missing: String(v.missing) }) };
+      case "budget":
+        return {
+          label: m.graph_gate_budget(),
+          detail: ok ? m.graph_gate_budget_ok({ mana: v.mana, spirit: v.spirit }) : v.weighted ? m.graph_gate_budget_differs({ mana: v.mana, spirit: v.spirit }) : m.graph_gate_budget_missing(),
+        };
       case "matches":
         return { label: m.graph_gate_matches(), detail: ok ? m.graph_gate_matches_ok({ n: v.n }) : m.graph_gate_matches_none() };
     }
@@ -242,6 +247,31 @@
     return (doc?.mechanics?.edges ?? []).filter((e) => e.s === pickedNode || e.t === pickedNode).map((e) => ({ type: e.type, other: nodeInfo.get(e.s === pickedNode ? e.t : e.s)?.name ?? "", line: e.line ?? "" }));
   });
   const pct = (x: number) => `${Math.round(x * 100)}%`;
+
+  function tempoLine(t: SkillTempo): string {
+    const cost = Object.entries(t.cost).map(([k, x]) => (k.endsWith("PerMinute") ? m.graph_tempo_cost_channel({ n: Math.round(x / 60), resource: k.replace("PerMinute", "") }) : m.graph_tempo_cost({ n: x, resource: k })));
+    return [
+      ...cost,
+      t.triggered ? m.graph_tempo_triggered() : t.instant ? m.graph_tempo_instant() : t.persistent && !cost.length ? m.graph_tempo_persistent() : m.graph_tempo_use({ s: t.use_time }),
+      t.cooldown ? m.graph_tempo_cooldown({ s: t.cooldown }) : "",
+      t.spirit ? m.graph_tempo_spirit({ n: t.spirit }) : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  const factorLabels = $derived<Record<string, string>>({
+    resource: m.graph_factor_resource(),
+    spirit: m.graph_factor_spirit(),
+    cooldown: m.graph_factor_cooldown(),
+    time: m.graph_factor_time(),
+  });
+  /** Only the factors that cost the chain something. */
+  function factorsLine(c: GraphChain): string {
+    return Object.entries(c.tempo?.factors ?? {})
+      .filter(([, x]) => x < 1)
+      .map(([k, x]) => `${factorLabels[k]} ×${x.toFixed(2)}`)
+      .join(" · ");
+  }
 </script>
 
 {#snippet checkList(list: GateCheck[])}
@@ -463,6 +493,16 @@
       </div>
     </div>
 
+    <div class="field">
+      <span class="name">{m.graph_req_resources()}</span>
+      <div class="chips">
+        <input class="input num" type="number" min="1" step="10" value={req.mana_per_second} aria-label={m.graph_req_mana()} onchange={(e) => graph.setReq({ mana_per_second: Math.max(1, Number(e.currentTarget.value) || 250) })} />
+        <span class="dim small">{m.graph_req_mana()}</span>
+        <input class="input num" type="number" min="0" step="10" value={req.spirit} aria-label={m.graph_req_spirit()} onchange={(e) => graph.setReq({ spirit: Math.max(0, Number(e.currentTarget.value) || 0) })} />
+        <span class="dim small">{m.graph_req_spirit()}</span>
+      </div>
+    </div>
+
     <div class="row">
       <button class="btn sm" onclick={() => copy("json")}>{copied === "json" ? m.graph_copied() : m.graph_copy_requirements()}</button>
     </div>
@@ -512,6 +552,7 @@
             <button class="btn sm ghost" onclick={() => (pickedNode = null)}>×</button>
           </div>
           <div class="dim small">{[n?.kind, n?.ascendancy, n?.slot, n?.n != null ? m.graph_node_builds({ n: n.n }) : ""].filter(Boolean).join(" · ")}</div>
+          {#if n?.tempo}<div class="small mono">{tempoLine(n.tempo)}</div>{/if}
           {#each nodeLines as l (l.type + l.other + l.line)}
             <div class="line small selectable">
               <span class="tag">{l.type === "produces" ? m.graph_edge_produces() : m.graph_edge_consumes()}</span>
@@ -530,11 +571,17 @@
                 <strong>{c.main_name}</strong>
                 <span class="tag">{kindLabels[c.kind] ?? c.kind}</span>
                 <span class="grow"></span>
+                {#if c.tempo && c.tempo.tempo < 1}<span class="tag cut" title={factorsLine(c)}>×{c.tempo.tempo.toFixed(2)}</span>{/if}
                 <span class="mono small" title={m.graph_chain_score_title()}>{c.score.toFixed(2)}</span>
               </div>
               <div class="small thesis">{c.thesis}</div>
               {#if pickedChain === c.id}
-                <div class="small dim">{m.graph_chain_numbers({ fit: pct(c.fit), novelty: pct(c.novelty) })}</div>
+                <div class="small dim">{m.graph_chain_numbers({ fit: pct(c.fit), novelty: pct(c.novelty) })}{c.tempo ? ` · ${m.graph_chain_tempo({ tempo: pct(c.tempo.tempo) })}` : ""}</div>
+                {#if c.tempo}
+                  <div class="small mono">{c.main_name}: {tempoLine(c.tempo.main)}</div>
+                  {#each c.tempo.helpers as h (h.id)}<div class="small mono">{h.name}: {tempoLine(h)}</div>{/each}
+                  {#if c.tempo.tempo < 1}<div class="small warnline">{factorsLine(c)}</div>{/if}
+                {/if}
                 {#each c.evidence as ev (ev)}<div class="small dim selectable ev">{ev}</div>{/each}
               {/if}
             </button>
@@ -858,6 +905,18 @@
     border-radius: 999px;
     color: var(--fg-2);
     white-space: nowrap;
+  }
+  .tag.cut,
+  .warnline {
+    color: var(--warn);
+  }
+  .tag.cut {
+    border-color: currentColor;
+  }
+  .num {
+    width: 64px;
+    height: 22px;
+    font-size: var(--fs-xs);
   }
   .thesis {
     color: var(--fg-1);
