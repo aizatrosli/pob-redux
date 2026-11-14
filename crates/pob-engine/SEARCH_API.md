@@ -66,8 +66,8 @@ A build opened by any bridge method starts a session with the exported main skil
 ```
 
 Rules as exg's API.md: tree connectivity as `PassiveSpec:BuildAllDependsAndPaths` (`pruned` lists dropped ids),
-a node without `ws` takes the first mode that connects it, a new group is `#groups+1`, item-granted groups
-cannot change, removals run highest slot first.
+a node without `ws` takes the first mode that connects it, a new group is `#groups+1`, in an item- or node-granted
+group slot 1 (the granted skill) cannot change but later slots take supports unless the group is `noSupports`, removals run highest slot first.
 
 ## Stats record
 
