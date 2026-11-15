@@ -2024,6 +2024,7 @@
   "graph_build_alt_excluded": "{name} excluded",
   "graph_build_alt_dps": "With the excluded gems allowed: {dps} DPS",
   "graph_build_left_out": "Not available at level {level}, left out: {list}",
+  "graph_build_over_level": "Still in the build although it needs more than level {level}, because the main skill comes from it: {list}",
   "graph_build_part": "{name} (level {level})",
   "graph_build_open": "Open build",
   "graph_build_seconds": "built in {s} s",

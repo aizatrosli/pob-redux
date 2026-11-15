@@ -374,6 +374,7 @@
     if (free != null) out.push({ text: m.graph_build_alt_dps({ dps: whole(free) }) });
     const left = r.parts.filter((p) => !p.included);
     if (left.length) out.push({ text: m.graph_build_left_out({ level: r.level, list: left.map((p) => m.graph_build_part({ name: p.name, level: p.level })).join(", ") }), warn: true });
+    if (r.over_level?.length) out.push({ text: m.graph_build_over_level({ level: r.level, list: r.over_level.map((p) => m.graph_build_part({ name: p.name, level: p.level })).join(", ") }), warn: true });
     return out;
   }
 

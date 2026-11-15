@@ -104,6 +104,8 @@ export interface ChainBuildResult {
   alternatives?: ChainBuildAlternative[];
   /** The chain's parts; one whose level is above the build's is left out. */
   parts: (Pick<LevelStep, "kind" | "name" | "level" | "gate"> & { included: boolean })[];
+  /** Items the build still holds although they need a higher level, because the main skill cannot exist without them. */
+  over_level?: { kind: string; name: string; level: number }[];
   seconds: number;
 }
 
