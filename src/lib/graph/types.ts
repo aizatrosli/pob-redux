@@ -337,6 +337,13 @@ export interface GraphEdge {
   w: number;
   line?: string;
   n?: number;
+  /** Typed reading of the link against game stat ids and PoB tags (exilegen edges.py). */
+  relation?: "applies" | "generates" | "spends" | "while" | "scales" | "raises_cap" | "amplifies" | "forbids" | "converts";
+  /** Who holds the state the link is about. */
+  owner?: "enemy" | "self";
+  /** confirmed by structured data, contradicted by it (see `why`), or read from text alone. */
+  verdict?: "confirmed" | "contradicted" | "text";
+  why?: string;
 }
 
 export interface GraphChain {
