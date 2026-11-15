@@ -1998,7 +1998,7 @@
   "graph_ladder_tag_meta": "meta",
   "graph_ladder_tag_new": "new pairing",
   "graph_doubt_tag": "doubtful link",
-  "graph_doubt_tag_title": "A link of this chain does not hold up when its text is read again. Doubtful chains are ranked last.",
+  "graph_doubt_tag_title": "A link of this chain does not hold up when its text is read again. The damage PoB measured for it comes from something else. Open the chain for the reason.",
   "graph_doubt_line": "Doubt: {line}",
   "graph_ladder_tag_off": "off-meta",
   "graph_ladder_tag_title": "Against the poe.ninja ladder sample: is the skill played, and do players pair it with this part",
