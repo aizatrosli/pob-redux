@@ -113,6 +113,7 @@ pub struct ToolContext {
     pub(crate) calls: Arc<AtomicU64>,
 }
 
+#[derive(Debug)]
 pub(crate) enum ToolError {
     /// Bad arguments: reported as a JSON-RPC invalid-params error.
     Invalid(String),
