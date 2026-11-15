@@ -992,6 +992,7 @@
                 {#if hit.length}<span class="tag cut" title={m.graph_excluded_tag_title({ list: hit.join(", ") })}>{m.graph_excluded_tag()}</span>{/if}
                 {#if fit}<span class="tag" class:cut={fit.free < 0} title={spiritTagTitle(fit)}>{m.graph_spirit_tag({ n: fit.picks.length })}</span>{/if}
                 {#if c.ladder}<span class="tag" class:good={c.ladder.cls === "meta"} title={m.graph_ladder_tag_title()}>{ladderTag(c.ladder)}</span>{/if}
+                {#if c.doubts?.length}<span class="tag" title={m.graph_doubt_tag_title()}>{m.graph_doubt_tag()}</span>{/if}
                 {#if c.predicted && !c.measured}<span class="tag" title={m.graph_predicted_tag_title()}>{m.graph_predicted_tag({ gain: times(c.predicted.score) })}</span>{/if}
                 {#if c.leveling}<span class="tag" class:cut={c.leveling.unobtainable || c.leveling.farm.length > 0} title={m.graph_level_tag_title({ level: c.leveling.online_level })}>{m.graph_level_tag({ level: c.leveling.online_level })}</span>{/if}
                 <span class="mono small" title={m.graph_chain_score_title()}>{c.score.toFixed(2)}</span>
@@ -1008,6 +1009,7 @@
                   {#if c.tempo.tempo < 1}<div class="small warnline">{factorsLine(c)}</div>{/if}
                 {/if}
                 {#if c.predicted}<div class="small mono pobline">{predictedLine(c.predicted)}</div>{/if}
+                {#if c.doubts?.length}{#each c.doubts as line (line)}<div class="small selectable">{m.graph_doubt_line({ line })}</div>{/each}{/if}
                 {#if c.ladder}{#each ladderLines(c.ladder) as line (line)}<div class="small dim selectable">{line}</div>{/each}{/if}
                 {#if c.measured}
                   {#each measuredLines(c.measured) as line (line)}<div class="small mono pobline">{line}</div>{/each}

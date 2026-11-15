@@ -362,6 +362,8 @@ export interface GraphChain {
   leveling?: ChainLeveling;
   measured?: ChainMeasured;
   ladder?: ChainLadder;
+  /** Reasons to doubt the chain itself (a link its own text does not bear out); such chains are ranked last. */
+  doubts?: string[];
   spirit?: ChainSpirit;
   predicted?: ChainPredicted;
   formula_rank?: number;
