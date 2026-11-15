@@ -1,4 +1,5 @@
 import { levelConfig, sameLevelConfig, settle } from "./leveling";
+import { fileSpiritBudget, sameSpiritBudget, spiritBudget } from "./spirit";
 import { GRAPH_FORMAT, GRAPH_VERSION, type CheckStatus, type GraphChain, type GraphDoc, type GraphRequirements } from "./types";
 
 /** One line of the gate. `id` picks the label; `values` fill its detail message. */
@@ -15,6 +16,7 @@ export interface GateCheck {
     | "scope_constraints"
     | "scope_uniques"
     | "budget"
+    | "spirit"
     | "leveling"
     | "measured"
     | "fitted"
@@ -117,8 +119,19 @@ export function gate(doc: GraphDoc | null, req: GraphRequirements, game: string,
   out.push({ id: "scope_uniques", status: missing.length ? "fail" : "ok", values: { missing: missing.join(", ") } });
   // the weights in the file were worked out for the file's budget
   const weighted = doc.mechanics?.chains.some((c) => c.tempo) ?? false;
-  const sameBudget = file.mana_per_second === req.mana_per_second && file.spirit === req.spirit;
-  out.push({ id: "budget", status: weighted && sameBudget ? "ok" : "warn", values: { weighted: weighted ? 1 : 0, mana: file.mana_per_second ?? "?", spirit: file.spirit ?? "?" } });
+  const cfg = levelConfig(req.leveling_config);
+  const spiritWant = spiritBudget(req, cfg);
+  const spiritFile = fileSpiritBudget(doc, cfg);
+  const sameBudget = file.mana_per_second === req.mana_per_second && spiritFile.budget === spiritWant.budget;
+  out.push({ id: "budget", status: weighted && sameBudget ? "ok" : "warn", values: { weighted: weighted ? 1 : 0, mana: file.mana_per_second ?? "?", spirit: spiritFile.budget } });
+  // the Spirit gem sets in the file fit the file's limit; under another limit they are fitted again here
+  const suggested = doc.mechanics?.chains.filter((c) => c.spirit).length ?? 0;
+  const wantGems = req.spirit_gems !== false;
+  out.push({
+    id: "spirit",
+    status: !wantGems || (suggested && sameSpiritBudget(spiritWant, spiritFile)) ? "ok" : "warn",
+    values: { suggested, on: wantGems ? 1 : 0, budget: spiritWant.budget, file: spiritFile.budget },
+  });
   const leveled = doc.mechanics?.chains.some((c) => c.leveling) ?? false;
   const wanted = req.leveling || req.online_by > 0;
   out.push({

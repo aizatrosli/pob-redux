@@ -33,14 +33,17 @@ class GraphStore {
     } catch {}
   }
 
-  /** Build one chain with exilegen at a level (null: the end level) without the excluded supports. One at a time. */
-  async buildChain(chain: string, level: number | null, excluded: string[]) {
+  /**
+   * Build one chain with exilegen at a level (null: the end level) without the excluded supports. One at a time.
+   * `spiritGems` are added to the build as named, with `spiritGear` Spirit assumed from equipment.
+   */
+  async buildChain(chain: string, level: number | null, excluded: string[], spiritGems: string[] = [], spiritGear = 0) {
     if (this.building) return;
-    const job: ChainJob = { status: "running", level, excluded, started: Date.now() };
+    const job: ChainJob = { status: "running", level, excluded, spiritGems, started: Date.now() };
     this.jobs = { ...this.jobs, [chain]: job };
     let next: ChainJob;
     try {
-      const result = await invoke<ChainBuildResult>("lab_chain_build", { chain, level, excludeSupports: excluded });
+      const result = await invoke<ChainBuildResult>("lab_chain_build", { chain, level, excludeSupports: excluded, spiritGems, spiritGear: Math.max(0, Math.round(spiritGear)) });
       next = { ...job, status: "done", result };
     } catch (e) {
       const err = e as { kind?: string; message?: string } | null;

@@ -20,6 +20,14 @@ export interface GraphRequirements {
   /** Resource the build can spend each second, and Spirit it can reserve. Chains are weighted against both. */
   mana_per_second: number;
   spirit: number;
+  /** Where the Spirit limit comes from: the fixed `spirit`, or quest Spirit at `spirit_level` plus `spirit_gear`. */
+  spirit_source: "fixed" | "level";
+  /** Character level for the Spirit limit when the source is "level". 0 means the final level. */
+  spirit_level: number;
+  /** Spirit from equipment, added on top of quest Spirit when the source is "level". */
+  spirit_gear: number;
+  /** Attach Spirit gem suggestions to chains. */
+  spirit_gems: boolean;
   /** Rank chains by how early they work while leveling and what has to be farmed for them. */
   leveling: boolean;
   /** Hide chains that are not complete by this character level. 0 means no limit. */
@@ -99,6 +107,64 @@ export interface ChainMeasured {
   error?: string;
 }
 
+/** A persistent skill that reserves Spirit, suggested for a chain. */
+export interface SpiritGem {
+  name: string;
+  skill: string;
+  spirit: number;
+  /** feeds: makes a state the chain's payoff uses. pays_off: uses a state the main skill makes. scales: adds damage. */
+  role: "feeds" | "pays_off" | "scales" | "utility";
+  /** The state that links it to the chain, for feeds and pays_off. */
+  token?: string | null;
+  why: string;
+  /** Character level at which the gem can be used. */
+  level: number | null;
+  score: number;
+  /** Why a candidate is not in the set. Only on `more`. */
+  blocked?: "budget" | "weaker" | "level";
+}
+
+/** The Spirit gems suggested for one chain, for the budget the file was exported with. */
+export interface ChainSpirit {
+  budget: number;
+  /** Spirit the chain's own skills reserve. */
+  own: number;
+  /** budget - own. Negative when the chain itself does not fit. */
+  free: number;
+  picks: SpiritGem[];
+  more: SpiritGem[];
+  used: number;
+}
+
+export interface SpiritGearPreset {
+  id: string;
+  label: string;
+  spirit: number;
+  note?: string;
+}
+
+/** `mechanics.info.spirit`: the Spirit budget of the export and the equipment that gives Spirit. */
+export interface SpiritInfo {
+  budget: number;
+  source: "fixed" | "level";
+  level?: number;
+  quest?: number;
+  gear?: number;
+  gear_presets?: SpiritGearPreset[];
+  gems?: number;
+}
+
+/** The Spirit side of a finished chain build, as PoB reports it. */
+export interface ChainBuildSpirit {
+  budget: number;
+  reserved: number;
+  unreserved: number;
+  /** A gem is not enabled when it had to be switched off for lack of Spirit. */
+  gems: { name: string; spirit: number; enabled: boolean }[];
+  /** DPS of the same chain build without the Spirit gems. */
+  dps_without?: number | null;
+}
+
 /** One excluded support in a chain build, and what took its place. Null means the plain build was not made. */
 export interface ChainBuildAlternative {
   excluded: string;
@@ -126,6 +192,8 @@ export interface ChainBuildResult {
   parts: (Pick<LevelStep, "kind" | "name" | "level" | "gate"> & { included: boolean })[];
   /** Items the build still holds although they need a higher level, because the main skill cannot exist without them. */
   over_level?: { kind: string; name: string; level: number }[];
+  /** Present when the build was asked for with Spirit gems. */
+  spirit?: ChainBuildSpirit | null;
   seconds: number;
 }
 
@@ -135,6 +203,8 @@ export interface ChainJob {
   /** Null builds at the generator's end level. */
   level: number | null;
   excluded: string[];
+  /** Spirit gems the build was asked to include. */
+  spiritGems?: string[];
   started: number;
   result?: ChainBuildResult;
   error?: string;
@@ -292,6 +362,7 @@ export interface GraphChain {
   leveling?: ChainLeveling;
   measured?: ChainMeasured;
   ladder?: ChainLadder;
+  spirit?: ChainSpirit;
   predicted?: ChainPredicted;
   formula_rank?: number;
   thesis: string;
@@ -351,6 +422,10 @@ export function defaultRequirements(): GraphRequirements {
     top: 150,
     mana_per_second: 250,
     spirit: 200,
+    spirit_source: "fixed",
+    spirit_level: 0,
+    spirit_gear: 0,
+    spirit_gems: true,
     leveling: false,
     online_by: 0,
     leveling_config: {},

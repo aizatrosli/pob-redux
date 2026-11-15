@@ -30,7 +30,8 @@ fn setup(message: String) -> ChainBuildError {
 }
 
 /// Arguments of `exilegen.lab chain` for one request. No `level` builds at the generator's end level.
-fn chain_args(chain: &str, level: Option<u32>, exclude_supports: &[String]) -> Vec<String> {
+/// Spirit gems are added exactly as named, with `spirit_gear` Spirit assumed from equipment.
+fn chain_args(chain: &str, level: Option<u32>, exclude_supports: &[String], spirit_gems: &[String], spirit_gear: u32) -> Vec<String> {
     let mut args = vec!["chain".to_string(), "--chain".to_string(), chain.to_string()];
     if let Some(level) = level {
         args.push("--level".into());
@@ -40,14 +41,24 @@ fn chain_args(chain: &str, level: Option<u32>, exclude_supports: &[String]) -> V
         args.push("--exclude-support".into());
         args.push(name.clone());
     }
-    // with exclusions, also build the unrestricted chain so the result says what replaced each one
-    if !exclude_supports.is_empty() {
+    if !spirit_gems.is_empty() {
+        args.push("--spirit-gems".into());
+        args.push(spirit_gems.join(","));
+        if spirit_gear > 0 {
+            args.push("--spirit-gear".into());
+            args.push(spirit_gear.to_string());
+        }
+    }
+    // with exclusions, also build the unrestricted chain so the result says what replaced each one;
+    // with Spirit gems, also build the chain without them so the result says what they add
+    if !exclude_supports.is_empty() || !spirit_gems.is_empty() {
         args.push("--compare".into());
     }
     args
 }
 
-/// Build one chain at a character level without the excluded support gems. Takes about a minute.
+/// Build one chain at a character level without the excluded support gems, with the named Spirit
+/// gems when any are given. Takes about a minute.
 #[tauri::command]
 pub(crate) async fn lab_chain_build(
     app: tauri::AppHandle,
@@ -55,13 +66,15 @@ pub(crate) async fn lab_chain_build(
     chain: String,
     level: Option<u32>,
     exclude_supports: Option<Vec<String>>,
+    spirit_gems: Option<Vec<String>>,
+    spirit_gear: Option<u32>,
 ) -> Result<Value, ChainBuildError> {
     if state.game() != Game::Poe2 {
         return Err(failed("chain builds are PoE2 only".into()));
     }
     let dir = app.path().app_data_dir().map_err(|e| failed(e.to_string()))?.join("lab");
     let lab = LabConfig::discover(&state.pob_root(), &dir, None).map_err(setup)?;
-    let args = chain_args(&chain, level, &exclude_supports.unwrap_or_default());
+    let args = chain_args(&chain, level, &exclude_supports.unwrap_or_default(), &spirit_gems.unwrap_or_default(), spirit_gear.unwrap_or(0));
     tauri::async_runtime::spawn_blocking(move || lab.run(&args, Some(Duration::from_secs(1800))))
         .await
         .map_err(|e| failed(e.to_string()))?
@@ -74,11 +87,25 @@ mod tests {
 
     #[test]
     fn args_follow_the_lab_command() {
-        assert_eq!(chain_args("ed0b", None, &[]), ["chain", "--chain", "ed0b"]);
+        assert_eq!(chain_args("ed0b", None, &[], &[], 0), ["chain", "--chain", "ed0b"]);
         assert_eq!(
-            chain_args("ed0b", Some(45), &["Rakiata's Flow".into(), "Extraction".into()]),
+            chain_args("ed0b", Some(45), &["Rakiata's Flow".into(), "Extraction".into()], &[], 0),
             ["chain", "--chain", "ed0b", "--level", "45", "--exclude-support", "Rakiata's Flow", "--exclude-support", "Extraction", "--compare"]
         );
+    }
+
+    #[test]
+    fn spirit_gems_are_named_and_compared() {
+        assert_eq!(
+            chain_args("ed0b", Some(33), &[], &["Herald of Ice".into(), "Herald of Ash".into()], 100),
+            ["chain", "--chain", "ed0b", "--level", "33", "--spirit-gems", "Herald of Ice,Herald of Ash", "--spirit-gear", "100", "--compare"]
+        );
+        assert_eq!(
+            chain_args("ed0b", None, &[], &["Herald of Ice".into()], 0),
+            ["chain", "--chain", "ed0b", "--spirit-gems", "Herald of Ice", "--compare"]
+        );
+        // Spirit from equipment only matters to a build that holds Spirit gems
+        assert_eq!(chain_args("ed0b", None, &[], &[], 100), ["chain", "--chain", "ed0b"]);
     }
 
     #[test]

@@ -2,7 +2,8 @@
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import GraphCanvas, { type DrawEdge, type DrawNode } from "$lib/graph/GraphCanvas.svelte";
   import { exportCommand, gate, gateOpen, matchingChains, type GateCheck } from "$lib/graph/requirements";
-  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type ChainJob, type ChainMeasured, type ChainLadder, type ChainPredicted, type LevelStep, type MeasuredSummary, type SkillTempo } from "$lib/graph/types";
+  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type ChainJob, type ChainMeasured, type ChainLadder, type ChainPredicted, type LevelStep, type MeasuredSummary, type SkillTempo, type SpiritGearPreset, type SpiritGem } from "$lib/graph/types";
+  import { fileSpiritBudget, fitSpirit, questSpirit, spiritBudget, spiritInfo, type SpiritFit } from "$lib/graph/spirit";
   import { defaultLevelConfig, levelConfig } from "$lib/graph/leveling";
   import type { LevelConfig } from "$lib/graph/types";
   import { graph } from "$lib/state/graph.svelte";
@@ -115,6 +116,11 @@
         return {
           label: m.graph_gate_measured(),
           detail: !v.on ? (Number(v.scored) > 0 ? m.graph_gate_measured_have({ n: v.scored }) : m.graph_gate_measured_none()) : c.status === "fail" ? m.graph_gate_measured_missing() : c.status === "warn" ? m.graph_gate_measured_reranked({ n: v.scored }) : m.graph_gate_measured_on({ n: v.scored }),
+        };
+      case "spirit":
+        return {
+          label: m.graph_gate_spirit(),
+          detail: !v.on ? m.graph_gate_spirit_off() : !Number(v.suggested) ? m.graph_gate_spirit_missing() : ok ? m.graph_gate_spirit_ok({ budget: v.budget, n: v.suggested }) : m.graph_gate_spirit_refit({ budget: v.budget }),
         };
       case "leveling":
         return {
@@ -233,7 +239,7 @@
     const q = query.trim().toLowerCase();
     if (mode === "mechanics") {
       const c = pickedChain ? chainById.get(pickedChain) : null;
-      if (c) return new Set([...c.path, ...c.path_tokens]);
+      if (c) return new Set([...c.path, ...c.path_tokens, ...(fits.get(c.id)?.picks ?? []).map(spiritNode).filter((id) => id != null)]);
       if (pickedNode) {
         const s = new Set([pickedNode]);
         for (const e of mech.edges) {
@@ -331,7 +337,76 @@
   /** The excluded gems the chain's PoB build socketed. */
   const usedExcluded = (c: GraphChain) => (c.measured?.supports ?? []).filter((x) => excluded.includes(x));
 
+  // ---- Spirit limit and Spirit gems
+  const spiritWant = $derived(spiritBudget(req, levelCfg));
+  const gearPresets = $derived<SpiritGearPreset[]>(spiritInfo(doc)?.gear_presets ?? []);
+  const showSpirit = $derived(req.spirit_gems !== false);
+  /** Each chain's Spirit gems under the request's limit: the file's set, or one fitted here when the limit differs. */
+  const fits = $derived.by(() => {
+    const out = new Map<string, SpiritFit>();
+    if (!doc || !showSpirit) return out;
+    const file = fileSpiritBudget(doc, levelCfg);
+    for (const c of chains) if (c.spirit) out.set(c.id, fitSpirit(c.spirit, spiritWant, file));
+    return out;
+  });
+  // which equipment presets make up the equipment Spirit; typing a number clears them
+  const PRESET_KEY = "pob-redux:graph-spirit-presets";
+  let gearOn = $state<string[]>(
+    (() => {
+      try {
+        const v = JSON.parse(localStorage.getItem(PRESET_KEY) ?? "[]");
+        return Array.isArray(v) ? v.map(String) : [];
+      } catch {
+        return [];
+      }
+    })(),
+  );
+  const gearParts = $derived(gearPresets.filter((p) => gearOn.includes(p.id)));
+  function setGear(spirit: number, on: string[]) {
+    gearOn = on;
+    try {
+      localStorage.setItem(PRESET_KEY, JSON.stringify(on));
+    } catch {}
+    graph.setReq({ spirit_gear: Math.max(0, Math.round(spirit)) });
+  }
+  function togglePreset(p: SpiritGearPreset) {
+    const had = gearOn.includes(p.id);
+    setGear((req.spirit_gear || 0) + (had ? -p.spirit : p.spirit), toggle(gearOn, p.id));
+  }
+  const roleLabels = $derived<Record<string, string>>({
+    feeds: m.graph_spirit_role_feeds(),
+    pays_off: m.graph_spirit_role_pays_off(),
+    scales: m.graph_spirit_role_scales(),
+    utility: m.graph_spirit_role_utility(),
+  });
+  const mechIds = $derived(new Set(mech.nodes.map((n) => n.id)));
+  /** The graph node of a Spirit gem, when the graph shows one. */
+  function spiritNode(g: SpiritGem): string | null {
+    for (const id of [`skill:${g.skill}`, `util:${g.skill}`]) if (mechIds.has(id)) return id;
+    const byName = (doc?.mechanics?.nodes ?? []).find((n) => (n.kind === "skill" || n.kind === "util") && n.name === g.name && mechIds.has(n.id));
+    return byName?.id ?? null;
+  }
+  function spiritLine(g: SpiritGem): string {
+    return [m.graph_spirit_cost({ n: g.spirit }), roleLabels[g.role] ?? g.role, g.token ? m.graph_spirit_state({ state: g.token.replace(/^[a-z]+:/, "") }) : "", g.level != null ? m.graph_spirit_from_level({ level: g.level }) : ""].filter(Boolean).join(" · ");
+  }
+  function blockedLine(g: SpiritGem): string {
+    const why = g.blocked === "level" ? (g.level != null ? m.graph_spirit_blocked_level({ level: g.level }) : m.graph_spirit_blocked_level_unknown()) : g.blocked === "weaker" ? m.graph_spirit_blocked_weaker() : m.graph_spirit_blocked_budget();
+    return `${m.graph_spirit_cost({ n: g.spirit })} · ${why}`;
+  }
+  function spiritTagTitle(f: SpiritFit): string {
+    if (f.free < 0) return m.graph_spirit_tag_over({ own: f.own, budget: f.budget });
+    return f.picks.length ? m.graph_spirit_tag_title({ list: f.picks.map((g) => g.name).join(", ") }) : m.graph_spirit_tag_none({ free: f.free });
+  }
+
   // ---- create build
+  let withSpirit = $state(true);
+  /** The Spirit gems a build of this chain gets: the fitted set, while the box is ticked. */
+  const buildGems = (c: GraphChain): string[] => (withSpirit ? (fits.get(c.id)?.picks ?? []).map((g) => g.name) : []);
+  /** Spirit from equipment for the build. A fixed limit is passed as what quests do not cover at the build's level. */
+  function buildGear(c: GraphChain): number {
+    if (spiritWant.source === "level") return spiritWant.gear ?? 0;
+    return Math.max(0, spiritWant.budget - questSpirit(buildLevel(c) ?? levelCfg.max_level, levelCfg));
+  }
   let levelChoice = $state<"start" | "online" | "final" | "custom">("final");
   let customLevel = $state(50);
   let now = $state(Date.now());
@@ -347,8 +422,8 @@
     if (levelChoice === "custom") return Math.min(levelCfg.max_level, Math.max(1, Math.round(customLevel) || 1));
     return null;
   }
-  /** The file's own build serves when nothing asked for differs from it. */
-  const canOpenMeasured = (c: GraphChain) => !!c.measured?.code && buildLevel(c) == null && usedExcluded(c).length === 0;
+  /** The file's own build serves when nothing asked for differs from it. It holds no Spirit gems. */
+  const canOpenMeasured = (c: GraphChain) => !!c.measured?.code && buildLevel(c) == null && usedExcluded(c).length === 0 && buildGems(c).length === 0;
   /** The app holds one build: opening a chain build replaces it, so unsaved changes are asked about first. */
   async function openBuild(code: string, name: string) {
     if (build.info?.unsaved && !(await confirm.ask({ title: m.graph_build_replace_title(), message: m.graph_build_replace_message(), ok: m.graph_build_replace_ok(), cancel: m.graph_build_replace_cancel() }))) return;
@@ -356,7 +431,7 @@
   }
   function createBuild(c: GraphChain) {
     if (canOpenMeasured(c)) void openBuild(c.measured!.code!, c.main_name);
-    else void graph.buildChain(c.id, buildLevel(c), [...excluded]);
+    else void graph.buildChain(c.id, buildLevel(c), [...excluded], buildGems(c), buildGear(c));
   }
   function jobLines(j: ChainJob): { text: string; warn?: boolean }[] {
     const r = j.result;
@@ -372,6 +447,11 @@
     }
     const free = (r.alternatives ?? []).find((a) => a.dps_without_exclusion != null)?.dps_without_exclusion;
     if (free != null) out.push({ text: m.graph_build_alt_dps({ dps: whole(free) }) });
+    if (r.spirit) {
+      out.push({ text: m.graph_build_spirit({ reserved: whole(r.spirit.reserved), budget: whole(r.spirit.budget) }), warn: r.spirit.unreserved < 0 });
+      for (const g of r.spirit.gems ?? []) out.push(g.enabled ? { text: m.graph_build_spirit_on({ name: g.name, spirit: g.spirit }) } : { text: m.graph_build_spirit_off({ name: g.name, spirit: g.spirit }), warn: true });
+      if (r.spirit.dps_without != null) out.push({ text: m.graph_build_spirit_without({ dps: whole(r.spirit.dps_without) }) });
+    }
     const left = r.parts.filter((p) => !p.included);
     if (left.length) out.push({ text: m.graph_build_left_out({ level: r.level, list: left.map((p) => m.graph_build_part({ name: p.name, level: p.level })).join(", ") }), warn: true });
     if (r.over_level?.length) out.push({ text: m.graph_build_over_level({ level: r.level, list: r.over_level.map((p) => m.graph_build_part({ name: p.name, level: p.level })).join(", ") }), warn: true });
@@ -379,14 +459,15 @@
   }
 
   // which request groups are open; the summary line says what a closed group holds
-  const groupOpen = $state({ build: true, items: false, supports: false, chains: false, leveling: false, budget: false });
+  const groupOpen = $state({ build: true, items: false, supports: false, chains: false, leveling: false, spirit: false, budget: false });
   const sums = $derived({
     build: [req.ascendancy ?? req.cls, ...req.damage_types, ...req.constraints.map((c) => constraintLabels[c] ?? c)].filter(Boolean).join(", ") || m.graph_sum_any(),
     items: [...req.uniques.map((u) => u.name), ...req.keystones, ...req.forbid_uniques.map((u) => m.graph_sum_not({ name: u }))].join(", ") || m.graph_sum_any(),
     supports: excluded.length ? m.graph_sum_excluded({ n: excluded.length, list: excluded.join(", ") }) : m.graph_sum_none_excluded(),
     chains: [req.rank_by === "measured" ? m.graph_sum_measured() : req.rank_by === "fitted" ? m.graph_sum_fitted() : "", ...req.chain_kinds.map((k) => kindLabels[k] ?? k), req.min_novelty > 0 ? m.graph_sum_novelty({ pct: pct(req.min_novelty) }) : ""].filter(Boolean).join(", ") || m.graph_sum_all(),
     leveling: [req.leveling ? m.graph_sum_ranked() : m.graph_sum_off(), req.online_by > 0 ? m.graph_sum_by({ level: req.online_by }) : "", levelChanged ? m.graph_sum_custom() : ""].filter(Boolean).join(", "),
-    budget: m.graph_sum_budget({ tier: req.budget_tier === "low" ? m.graph_budget_low() : req.budget_tier === "mid" ? m.graph_budget_mid() : m.graph_budget_high(), mana: req.mana_per_second, spirit: req.spirit }),
+    spirit: [spiritWant.source === "level" ? m.graph_sum_spirit_level({ spirit: spiritWant.budget, level: spiritWant.level ?? 0 }) : m.graph_sum_spirit_fixed({ spirit: spiritWant.budget }), showSpirit ? "" : m.graph_sum_spirit_no_gems()].filter(Boolean).join(", "),
+    budget: m.graph_sum_budget({ tier: req.budget_tier === "low" ? m.graph_budget_low() : req.budget_tier === "mid" ? m.graph_budget_mid() : m.graph_budget_high(), mana: req.mana_per_second, spirit: spiritWant.budget }),
   });
 
   const measuredInfo = $derived((doc?.mechanics?.info?.measured as MeasuredSummary | undefined) ?? null);
@@ -754,6 +835,61 @@
       </div>
       <span class="dim small">{m.graph_level_settings_hint()}</span>
     </details>
+    <details class="group" open={groupOpen.spirit} ontoggle={(e) => (groupOpen.spirit = e.currentTarget.open)}>
+      <summary><span class="gname">{m.graph_group_spirit()}</span><span class="gsum">{sums.spirit}</span></summary>
+      <div class="field">
+        <span class="name">{m.graph_spirit_source()}</span>
+        <div class="chips">
+          <button class="btn sm" class:on={req.spirit_source !== "level"} aria-pressed={req.spirit_source !== "level"} onclick={() => graph.setReq({ spirit_source: "fixed" })}>{m.graph_spirit_source_fixed()}</button>
+          <button class="btn sm" class:on={req.spirit_source === "level"} aria-pressed={req.spirit_source === "level"} onclick={() => graph.setReq({ spirit_source: "level" })}>{m.graph_spirit_source_level()}</button>
+        </div>
+        <span class="dim small">{m.graph_spirit_source_hint()}</span>
+      </div>
+      {#if req.spirit_source === "level"}
+        <div class="pairs">
+          <label for="g-spirit-level">{m.graph_spirit_level()}</label>
+          <input
+            id="g-spirit-level"
+            class="input num"
+            type="number"
+            min="0"
+            max={levelCfg.max_level}
+            step="1"
+            placeholder={m.graph_spirit_level_final()}
+            value={req.spirit_level > 0 ? req.spirit_level : ""}
+            onchange={(e) => graph.setReq({ spirit_level: Math.min(levelCfg.max_level, Math.max(0, Math.round(Number(e.currentTarget.value) || 0))) })}
+          />
+          <label for="g-spirit-gear">{m.graph_spirit_gear()}</label>
+          <input id="g-spirit-gear" class="input num" type="number" min="0" step="10" value={req.spirit_gear || 0} onchange={(e) => setGear(Number(e.currentTarget.value) || 0, [])} />
+        </div>
+        <span class="dim small">{m.graph_spirit_level_hint()}</span>
+        {#if gearPresets.length}
+          <div class="field">
+            <span class="name">{m.graph_spirit_presets()}</span>
+            <div class="chips">
+              {#each gearPresets as p (p.id)}
+                <button class="btn sm" class:on={gearOn.includes(p.id)} aria-pressed={gearOn.includes(p.id)} title={p.note || undefined} onclick={() => togglePreset(p)}>{m.graph_spirit_preset({ label: p.label, spirit: p.spirit })}</button>
+              {/each}
+            </div>
+            <span class="dim small">
+              {gearParts.length ? m.graph_spirit_presets_sum({ list: gearParts.map((p) => m.graph_spirit_preset_part({ label: p.label, spirit: p.spirit })).join(" + "), total: req.spirit_gear || 0 }) : m.graph_spirit_presets_hint()}
+            </span>
+          </div>
+        {/if}
+        <div class="small resolved" role="status">{m.graph_spirit_resolved({ level: spiritWant.level ?? 0, quest: spiritWant.quest ?? 0, gear: spiritWant.gear ?? 0, budget: spiritWant.budget })}</div>
+      {:else}
+        <div class="pairs">
+          <label for="g-spirit">{m.graph_req_spirit()}</label>
+          <input id="g-spirit" class="input num" type="number" min="0" step="10" value={req.spirit} onchange={(e) => graph.setReq({ spirit: Math.max(0, Number(e.currentTarget.value) || 0) })} />
+        </div>
+      {/if}
+      <div class="field">
+        <div class="chips">
+          <button class="btn sm" class:on={showSpirit} aria-pressed={showSpirit} onclick={() => graph.setReq({ spirit_gems: !showSpirit })}>{m.graph_spirit_suggest()}</button>
+        </div>
+        <span class="dim small">{m.graph_spirit_suggest_hint()}</span>
+      </div>
+    </details>
     <details class="group" open={groupOpen.budget} ontoggle={(e) => (groupOpen.budget = e.currentTarget.open)}>
       <summary><span class="gname">{m.graph_group_budget()}</span><span class="gsum">{sums.budget}</span></summary>
       <div class="field">
@@ -770,8 +906,6 @@
       <div class="pairs">
         <label for="g-mana">{m.graph_req_mana()}</label>
         <input id="g-mana" class="input num" type="number" min="1" step="10" value={req.mana_per_second} onchange={(e) => graph.setReq({ mana_per_second: Math.max(1, Number(e.currentTarget.value) || 250) })} />
-        <label for="g-spirit">{m.graph_req_spirit()}</label>
-        <input id="g-spirit" class="input num" type="number" min="0" step="10" value={req.spirit} onchange={(e) => graph.setReq({ spirit: Math.max(0, Number(e.currentTarget.value) || 0) })} />
       </div>
     </details>
 
@@ -845,6 +979,7 @@
         <div class="list">
           {#each listedChains as c (c.id)}
             {@const hit = usedExcluded(c)}
+            {@const fit = fits.get(c.id)}
             <div class="item" class:on={pickedChain === c.id}>
               <button class="rowhead" aria-expanded={pickedChain === c.id} onclick={() => pickChain(c)}>
               <div class="top">
@@ -855,6 +990,7 @@
                 {#if c.measured}{@const t = measuredTag(c.measured)}<span class="tag pob" class:good={t.tone === "good"} class:bad={t.tone === "bad"} title={m.graph_measured_tag_title()}>{t.text}</span>{/if}
                 {#if c.measured?.supports && c.measured.dps > 0}<span class="tag" class:cut={c.measured.supports.length === 0} title={c.measured.supports.join(", ") || m.graph_measured_supports_none()}>{m.graph_supports_tag({ n: c.measured.supports.length })}</span>{/if}
                 {#if hit.length}<span class="tag cut" title={m.graph_excluded_tag_title({ list: hit.join(", ") })}>{m.graph_excluded_tag()}</span>{/if}
+                {#if fit}<span class="tag" class:cut={fit.free < 0} title={spiritTagTitle(fit)}>{m.graph_spirit_tag({ n: fit.picks.length })}</span>{/if}
                 {#if c.ladder}<span class="tag" class:good={c.ladder.cls === "meta"} title={m.graph_ladder_tag_title()}>{ladderTag(c.ladder)}</span>{/if}
                 {#if c.predicted && !c.measured}<span class="tag" title={m.graph_predicted_tag_title()}>{m.graph_predicted_tag({ gain: times(c.predicted.score) })}</span>{/if}
                 {#if c.leveling}<span class="tag" class:cut={c.leveling.unobtainable || c.leveling.farm.length > 0} title={m.graph_level_tag_title({ level: c.leveling.online_level })}>{m.graph_level_tag({ level: c.leveling.online_level })}</span>{/if}
@@ -891,6 +1027,30 @@
                     <div class="small mono" class:warnline={s.gate === "boss" || s.gate === "unobtainable"}>{m.graph_level_step({ level: s.level, name: s.name })} · {stepLine(s)}</div>
                   {/each}
                 {/if}
+                {#if fit}
+                  <div class="spirit">
+                    <div class="small stitle">{m.graph_spirit_title()}</div>
+                    {#each fit.picks as g (g.name)}
+                      <div class="small selectable sgem">
+                        <div><strong>{g.name}</strong> <span class="mono">{spiritLine(g)}</span></div>
+                        {#if g.why}<div class="dim">{g.why}</div>{/if}
+                      </div>
+                    {/each}
+                    {#if fit.free < 0}
+                      <div class="small warnline">{m.graph_spirit_over({ own: fit.own, budget: fit.budget })}</div>
+                    {:else}
+                      {#if !fit.picks.length}<div class="small dim">{fit.more.length ? m.graph_spirit_none_fit({ free: fit.free }) : m.graph_spirit_none()}</div>{/if}
+                      <div class="small mono">{m.graph_spirit_used({ total: fit.own + fit.used, budget: fit.budget, own: fit.own, used: fit.used })}</div>
+                    {/if}
+                    {#if fit.approx}<div class="small dim">{m.graph_spirit_approx()}</div>{/if}
+                    {#if fit.more.length}
+                      <div class="small dim">{m.graph_spirit_more()}</div>
+                      {#each fit.more as g (g.name)}
+                        <div class="small selectable sgem out">{g.name} <span class="mono">{blockedLine(g)}</span></div>
+                      {/each}
+                    {/if}
+                  </div>
+                {/if}
                 {#each c.evidence as ev (ev)}<div class="small dim selectable ev">{ev}</div>{/each}
                 <div class="create">
                   <button class="btn sm on" disabled={graph.building} onclick={() => createBuild(c)}>{canOpenMeasured(c) ? m.graph_build_open_measured() : m.graph_build_create()}</button>
@@ -905,12 +1065,19 @@
                   {#if levelChoice === "custom"}
                     <input class="input num" type="number" min="1" max={levelCfg.max_level} step="1" aria-label={m.graph_build_level()} bind:value={customLevel} disabled={graph.building} />
                   {/if}
+                  {#if fit}
+                    <label class="small tick" title={m.graph_build_with_spirit_title()}>
+                      <input type="checkbox" checked={withSpirit && fit.picks.length > 0} disabled={graph.building || !fit.picks.length} onchange={(e) => (withSpirit = e.currentTarget.checked)} />
+                      {m.graph_build_with_spirit()}
+                    </label>
+                  {/if}
                 </div>
                 <div class="small dim">
                   {canOpenMeasured(c) ? m.graph_build_hint_measured() : excluded.length ? m.graph_build_hint_excluding({ n: excluded.length }) : m.graph_build_hint()}
+                  {#if buildGems(c).length}{m.graph_build_hint_spirit({ n: buildGems(c).length })}{/if}
                 </div>
                 {#if job?.status === "running"}
-                  <div class="small running" role="status"><span class="spin"></span>{job.level == null ? m.graph_build_running_final() : m.graph_build_running({ level: job.level })} {m.graph_build_running_time({ s: Math.max(0, Math.round((now - job.started) / 1000)) })}</div>
+                  <div class="small running" role="status"><span class="spin"></span>{job.level == null ? m.graph_build_running_final() : m.graph_build_running({ level: job.level })} {#if job.spiritGems?.length}{m.graph_build_running_spirit({ n: job.spiritGems.length })}{/if} {m.graph_build_running_time({ s: Math.max(0, Math.round((now - job.started) / 1000)) })}</div>
                 {:else if job?.status === "error"}
                   <div class="small bad selectable" role="alert">{m.graph_build_error({ error: job.error ?? "" })}</div>
                   {#if job.setup}<div class="small dim selectable">{m.graph_build_setup_hint()}</div>{/if}
@@ -1330,6 +1497,30 @@
   .sup.out {
     color: var(--warn);
     text-decoration: line-through;
+  }
+  .spirit {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 5px 8px;
+    border-left: 2px solid var(--c-gem);
+  }
+  .stitle {
+    color: var(--fg-0);
+    font-weight: 600;
+  }
+  .sgem.out {
+    color: var(--fg-2);
+  }
+  .tick {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--fg-1);
+    cursor: var(--cursor-pointer, pointer);
+  }
+  .resolved {
+    color: var(--fg-0);
   }
   .create {
     display: flex;
