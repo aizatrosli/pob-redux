@@ -399,7 +399,7 @@
   }
   function ladderLines(l: ChainLadder): string[] {
     if (!l.known || l.share == null) return [m.graph_ladder_absent()];
-    const out = [m.graph_ladder_share({ pct: (l.share * 100).toFixed(1), rank: l.rank ?? 0, n: l.n ?? 0 })];
+    const out: string[] = [m.graph_ladder_share({ pct: (l.share * 100).toFixed(1), rank: l.rank ?? 0, n: l.n ?? 0 })];
     if (l.dps_median) out.push(l.dps_vs_median != null ? m.graph_ladder_dps_ratio({ dps: whole(l.dps_median), ratio: times(l.dps_vs_median) }) + (l.thin ? ` ${m.graph_ladder_thin()}` : "") : m.graph_ladder_dps({ dps: whole(l.dps_median) }));
     if (l.supports?.length) out.push(m.graph_ladder_supports({ list: l.supports.join(", ") }));
     if (l.uniques?.length) out.push(m.graph_ladder_uniques({ list: l.uniques.join(", ") }));
