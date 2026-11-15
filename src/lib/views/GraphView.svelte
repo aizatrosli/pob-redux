@@ -2,12 +2,14 @@
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import GraphCanvas, { type DrawEdge, type DrawNode } from "$lib/graph/GraphCanvas.svelte";
   import { exportCommand, gate, gateOpen, matchingChains, type GateCheck } from "$lib/graph/requirements";
-  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type ChainMeasured, type ChainPredicted, type LevelStep, type MeasuredSummary, type SkillTempo } from "$lib/graph/types";
+  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type ChainJob, type ChainMeasured, type ChainPredicted, type LevelStep, type MeasuredSummary, type SkillTempo } from "$lib/graph/types";
   import { defaultLevelConfig, levelConfig } from "$lib/graph/leveling";
   import type { LevelConfig } from "$lib/graph/types";
   import { graph } from "$lib/state/graph.svelte";
   import { build } from "$lib/state/build.svelte";
   import { game } from "$lib/state/game.svelte";
+  import { confirm } from "$lib/state/confirm.svelte";
+  import { engine } from "$lib/engine.svelte";
   import { m } from "$lib/paraglide/messages";
 
   const req = $derived(graph.req);
@@ -287,11 +289,100 @@
   });
   const pct = (x: number) => `${Math.round(x * 100)}%`;
 
+  // ---- excluded support gems
+  const excluded = $derived(req.exclude_supports ?? []);
+  const supportNames = $derived.by(() => {
+    const all = doc?.mechanics?.info?.support_names;
+    if (Array.isArray(all) && all.length) return all as string[];
+    const seen = (doc?.mechanics?.chains ?? []).flatMap((c) => c.measured?.supports ?? []);
+    return [...new Set([...engineSupports, ...seen])].sort();
+  });
+  // a file without the gem list falls back to the engine's support gems, then to the gems its builds used
+  let engineSupports = $state.raw<string[]>([]);
+  let askedEngine = false;
+  $effect(() => {
+    if (askedEngine || !doc?.mechanics || Array.isArray(doc.mechanics.info?.support_names)) return;
+    askedEngine = true;
+    engine
+      .gemNames()
+      .then((r) => (engineSupports = r.gems.filter((g) => g.kind === "support").map((g) => g.name)))
+      .catch(() => {});
+  });
+  const lineageSupports = $derived.by(() => {
+    const l = doc?.mechanics?.info?.lineage_supports;
+    return Array.isArray(l) ? (l as string[]) : [];
+  });
+  let supportEntry = $state("");
+  function excludeSupports(names: string[]) {
+    const add = names.map((n) => n.trim()).filter((n) => n && !excluded.includes(n));
+    if (add.length) graph.setReq({ exclude_supports: [...excluded, ...add] });
+  }
+  function toggleSupport(name: string) {
+    graph.setReq({ exclude_supports: toggle(excluded, name) });
+  }
+  /** Typed text counts once it names a gem of the file, in any letter case. */
+  function addSupportEntry() {
+    const want = supportEntry.trim().toLowerCase();
+    const name = supportNames.find((n) => n.toLowerCase() === want);
+    if (!name) return;
+    excludeSupports([name]);
+    supportEntry = "";
+  }
+  /** The excluded gems the chain's PoB build socketed. */
+  const usedExcluded = (c: GraphChain) => (c.measured?.supports ?? []).filter((x) => excluded.includes(x));
+
+  // ---- create build
+  let levelChoice = $state<"start" | "online" | "final" | "custom">("final");
+  let customLevel = $state(50);
+  let now = $state(Date.now());
+  $effect(() => {
+    if (!graph.building) return;
+    const t = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(t);
+  });
+  /** The level to build at; null is the generator's end level. */
+  function buildLevel(c: GraphChain): number | null {
+    if (levelChoice === "start" && c.leveling) return c.leveling.start_level;
+    if (levelChoice === "online" && c.leveling) return c.leveling.online_level;
+    if (levelChoice === "custom") return Math.min(levelCfg.max_level, Math.max(1, Math.round(customLevel) || 1));
+    return null;
+  }
+  /** The file's own build serves when nothing asked for differs from it. */
+  const canOpenMeasured = (c: GraphChain) => !!c.measured?.code && buildLevel(c) == null && usedExcluded(c).length === 0;
+  /** The app holds one build: opening a chain build replaces it, so unsaved changes are asked about first. */
+  async function openBuild(code: string, name: string) {
+    if (build.info?.unsaved && !(await confirm.ask({ title: m.graph_build_replace_title(), message: m.graph_build_replace_message(), ok: m.graph_build_replace_ok(), cancel: m.graph_build_replace_cancel() }))) return;
+    await build.loadCode(code, name);
+  }
+  function createBuild(c: GraphChain) {
+    if (canOpenMeasured(c)) void openBuild(c.measured!.code!, c.main_name);
+    else void graph.buildChain(c.id, buildLevel(c), [...excluded]);
+  }
+  function jobLines(j: ChainJob): { text: string; warn?: boolean }[] {
+    const r = j.result;
+    if (!r) return [];
+    if (!r.ok) return [{ text: m.graph_build_failed({ level: r.level, why: r.violations || m.graph_build_no_reason() }), warn: true }];
+    const out: { text: string; warn?: boolean }[] = [{ text: r.ehp ? m.graph_build_result({ level: r.level, dps: whole(r.dps), ehp: whole(r.ehp) }) : m.graph_build_result_dps({ level: r.level, dps: whole(r.dps) }) }];
+    if (!r.feasible) out.push({ text: m.graph_build_infeasible({ why: r.violations || m.graph_build_no_reason() }), warn: true });
+    out.push({ text: r.supports.length ? m.graph_build_supports({ list: r.supports.join(", ") }) : m.graph_build_supports_none() });
+    for (const a of r.alternatives ?? []) {
+      if (a.was_used == null) out.push({ text: m.graph_build_alt_excluded({ name: a.excluded }) });
+      else if (!a.was_used) out.push({ text: m.graph_build_alt_unused({ name: a.excluded }) });
+      else out.push({ text: a.replaced_by ? m.graph_build_alt_replaced({ name: a.excluded, by: a.replaced_by }) : m.graph_build_alt_empty({ name: a.excluded }) });
+    }
+    const free = (r.alternatives ?? []).find((a) => a.dps_without_exclusion != null)?.dps_without_exclusion;
+    if (free != null) out.push({ text: m.graph_build_alt_dps({ dps: whole(free) }) });
+    const left = r.parts.filter((p) => !p.included);
+    if (left.length) out.push({ text: m.graph_build_left_out({ level: r.level, list: left.map((p) => m.graph_build_part({ name: p.name, level: p.level })).join(", ") }), warn: true });
+    return out;
+  }
+
   // which request groups are open; the summary line says what a closed group holds
-  const groupOpen = $state({ build: true, items: false, chains: false, leveling: false, budget: false });
+  const groupOpen = $state({ build: true, items: false, supports: false, chains: false, leveling: false, budget: false });
   const sums = $derived({
     build: [req.ascendancy ?? req.cls, ...req.damage_types, ...req.constraints.map((c) => constraintLabels[c] ?? c)].filter(Boolean).join(", ") || m.graph_sum_any(),
     items: [...req.uniques.map((u) => u.name), ...req.keystones, ...req.forbid_uniques.map((u) => m.graph_sum_not({ name: u }))].join(", ") || m.graph_sum_any(),
+    supports: excluded.length ? m.graph_sum_excluded({ n: excluded.length, list: excluded.join(", ") }) : m.graph_sum_none_excluded(),
     chains: [req.rank_by === "measured" ? m.graph_sum_measured() : req.rank_by === "fitted" ? m.graph_sum_fitted() : "", ...req.chain_kinds.map((k) => kindLabels[k] ?? k), req.min_novelty > 0 ? m.graph_sum_novelty({ pct: pct(req.min_novelty) }) : ""].filter(Boolean).join(", ") || m.graph_sum_all(),
     leveling: [req.leveling ? m.graph_sum_ranked() : m.graph_sum_off(), req.online_by > 0 ? m.graph_sum_by({ level: req.online_by }) : "", levelChanged ? m.graph_sum_custom() : ""].filter(Boolean).join(", "),
     budget: m.graph_sum_budget({ tier: req.budget_tier === "low" ? m.graph_budget_low() : req.budget_tier === "mid" ? m.graph_budget_mid() : m.graph_budget_high(), mana: req.mana_per_second, spirit: req.spirit }),
@@ -318,7 +409,7 @@
     if (mm.state_lift != null && Math.abs(mm.state_lift - 1) > 0.005) out.push(m.graph_measured_state({ lift: times(mm.state_lift), gain: times(mm.gain_credited ?? 0) }));
     else if (mm.state_lift != null) out.push(m.graph_measured_state_none());
     if (mm.supports) {
-      out.push(mm.supports.length ? m.graph_measured_supports({ list: mm.supports.join(", ") }) : mm.main_granted ? m.graph_measured_supports_granted() : m.graph_measured_supports_none());
+      if (!mm.supports.length) out.push(mm.main_granted ? m.graph_measured_supports_granted() : m.graph_measured_supports_none());
       if (mm.base_supports && mm.base_supports.join("|") !== mm.supports.join("|")) out.push(m.graph_measured_supports_base({ list: mm.base_supports.join(", ") || m.graph_measured_supports_zero() }));
     }
     if (!mm.feasible) out.push(m.graph_measured_infeasible());
@@ -565,6 +656,37 @@
         </div>
       </div>
     </details>
+    <details class="group" open={groupOpen.supports} ontoggle={(e) => (groupOpen.supports = e.currentTarget.open)}>
+      <summary><span class="gname">{m.graph_group_supports()}</span><span class="gsum">{sums.supports}</span></summary>
+      <div class="field">
+        <span class="name">{m.graph_req_exclude_supports()}</span>
+        <div class="chips">
+          {#each excluded as x (x)}
+            <button class="btn sm on" title={m.graph_req_remove()} onclick={() => toggleSupport(x)}>{x} ×</button>
+          {/each}
+        </div>
+        <div class="chips">
+          <input
+            class="input entry"
+            list="g-support-names"
+            placeholder={m.graph_req_add_support()}
+            aria-label={m.graph_req_add_support()}
+            disabled={!supportNames.length}
+            bind:value={supportEntry}
+            oninput={addSupportEntry}
+            onkeydown={(e) => e.key === "Enter" && addSupportEntry()}
+          />
+          <datalist id="g-support-names">
+            {#each supportNames.filter((n) => !excluded.includes(n)) as n (n)}<option value={n}></option>{/each}
+          </datalist>
+          {#if lineageSupports.length}
+            <button class="btn sm ghost" disabled={lineageSupports.every((n) => excluded.includes(n))} onclick={() => excludeSupports(lineageSupports)}>{m.graph_req_exclude_lineage({ n: lineageSupports.length })}</button>
+          {/if}
+          {#if excluded.length}<button class="btn sm ghost" onclick={() => graph.setReq({ exclude_supports: [] })}>{m.graph_req_clear_supports()}</button>{/if}
+        </div>
+        <span class="dim small">{supportNames.length ? m.graph_req_exclude_supports_hint() : m.graph_req_exclude_supports_empty()}</span>
+      </div>
+    </details>
     <details class="group" open={groupOpen.chains} ontoggle={(e) => (groupOpen.chains = e.currentTarget.open)}>
       <summary><span class="gname">{m.graph_group_chains()}</span><span class="gsum">{sums.chains}</span></summary>
       <div class="field">
@@ -711,7 +833,9 @@
         {/if}
         <div class="list">
           {#each listedChains as c (c.id)}
-            <button class="item" class:on={pickedChain === c.id} onclick={() => pickChain(c)}>
+            {@const hit = usedExcluded(c)}
+            <div class="item" class:on={pickedChain === c.id}>
+              <button class="rowhead" aria-expanded={pickedChain === c.id} onclick={() => pickChain(c)}>
               <div class="top">
                 <strong>{c.main_name}</strong>
                 <span class="tag">{kindLabels[c.kind] ?? c.kind}</span>
@@ -719,12 +843,16 @@
                 {#if c.tempo && c.tempo.tempo < 1}<span class="tag cut" title={factorsLine(c)}>×{c.tempo.tempo.toFixed(2)}</span>{/if}
                 {#if c.measured}{@const t = measuredTag(c.measured)}<span class="tag pob" class:good={t.tone === "good"} class:bad={t.tone === "bad"} title={m.graph_measured_tag_title()}>{t.text}</span>{/if}
                 {#if c.measured?.supports && c.measured.dps > 0}<span class="tag" class:cut={c.measured.supports.length === 0} title={c.measured.supports.join(", ") || m.graph_measured_supports_none()}>{m.graph_supports_tag({ n: c.measured.supports.length })}</span>{/if}
+                {#if hit.length}<span class="tag cut" title={m.graph_excluded_tag_title({ list: hit.join(", ") })}>{m.graph_excluded_tag()}</span>{/if}
                 {#if c.predicted && !c.measured}<span class="tag" title={m.graph_predicted_tag_title()}>{m.graph_predicted_tag({ gain: times(c.predicted.score) })}</span>{/if}
                 {#if c.leveling}<span class="tag" class:cut={c.leveling.unobtainable || c.leveling.farm.length > 0} title={m.graph_level_tag_title({ level: c.leveling.online_level })}>{m.graph_level_tag({ level: c.leveling.online_level })}</span>{/if}
                 <span class="mono small" title={m.graph_chain_score_title()}>{c.score.toFixed(2)}</span>
               </div>
               <div class="small thesis">{c.thesis}</div>
+              </button>
               {#if pickedChain === c.id}
+                {@const job = graph.jobs[c.id]}
+                <div class="more">
                 <div class="small dim">{m.graph_chain_numbers({ fit: pct(c.fit), novelty: pct(c.novelty) })}{c.tempo ? ` · ${m.graph_chain_tempo({ tempo: pct(c.tempo.tempo) })}` : ""}</div>
                 {#if c.tempo}
                   <div class="small mono">{c.main_name}: {tempoLine(c.tempo.main)}</div>
@@ -734,6 +862,15 @@
                 {#if c.predicted}<div class="small mono pobline">{predictedLine(c.predicted)}</div>{/if}
                 {#if c.measured}
                   {#each measuredLines(c.measured) as line (line)}<div class="small mono pobline">{line}</div>{/each}
+                  {#if c.measured.supports?.length && c.measured.built && c.measured.dps > 0}
+                    <div class="small mono pobline sups">
+                      <span>{m.graph_measured_supports_label()}</span>
+                      {#each c.measured.supports as sname (sname)}
+                        <button class="sup" class:out={excluded.includes(sname)} aria-pressed={excluded.includes(sname)} title={excluded.includes(sname) ? m.graph_support_allow_title() : m.graph_support_exclude_title()} onclick={() => toggleSupport(sname)}>{sname}</button>
+                      {/each}
+                    </div>
+                    {#if hit.length}<div class="small warnline">{m.graph_excluded_line({ list: hit.join(", ") })}</div>{/if}
+                  {/if}
                 {/if}
                 {#if c.leveling}
                   <div class="small dim">{m.graph_level_summary({ start: c.leveling.start_level, online: c.leveling.online_level, factor: c.leveling.factor.toFixed(2) })}</div>
@@ -742,8 +879,42 @@
                   {/each}
                 {/if}
                 {#each c.evidence as ev (ev)}<div class="small dim selectable ev">{ev}</div>{/each}
+                <div class="create">
+                  <button class="btn sm on" disabled={graph.building} onclick={() => createBuild(c)}>{canOpenMeasured(c) ? m.graph_build_open_measured() : m.graph_build_create()}</button>
+                  <select class="select" aria-label={m.graph_build_level()} bind:value={levelChoice} disabled={graph.building}>
+                    {#if c.leveling}
+                      <option value="start">{m.graph_build_level_start({ level: c.leveling.start_level })}</option>
+                      {#if c.leveling.online_level !== c.leveling.start_level}<option value="online">{m.graph_build_level_online({ level: c.leveling.online_level })}</option>{/if}
+                    {/if}
+                    <option value="final">{m.graph_build_level_final()}</option>
+                    <option value="custom">{m.graph_build_level_custom()}</option>
+                  </select>
+                  {#if levelChoice === "custom"}
+                    <input class="input num" type="number" min="1" max={levelCfg.max_level} step="1" aria-label={m.graph_build_level()} bind:value={customLevel} disabled={graph.building} />
+                  {/if}
+                </div>
+                <div class="small dim">
+                  {canOpenMeasured(c) ? m.graph_build_hint_measured() : excluded.length ? m.graph_build_hint_excluding({ n: excluded.length }) : m.graph_build_hint()}
+                </div>
+                {#if job?.status === "running"}
+                  <div class="small running" role="status"><span class="spin"></span>{job.level == null ? m.graph_build_running_final() : m.graph_build_running({ level: job.level })} {m.graph_build_running_time({ s: Math.max(0, Math.round((now - job.started) / 1000)) })}</div>
+                {:else if job?.status === "error"}
+                  <div class="small bad selectable" role="alert">{m.graph_build_error({ error: job.error ?? "" })}</div>
+                  {#if job.setup}<div class="small dim selectable">{m.graph_build_setup_hint()}</div>{/if}
+                {:else if job?.result}
+                  <div class="built">
+                    {#each jobLines(job) as l (l.text)}<div class="small mono pobline selectable" class:warnline={l.warn}>{l.text}</div>{/each}
+                    <div class="create">
+                      {#if job.result.code}<button class="btn sm" onclick={() => openBuild(job.result!.code!, job.result!.main_name)}>{m.graph_build_open()}</button>{/if}
+                      <span class="small dim">{m.graph_build_seconds({ s: Math.round(job.result.seconds) })}</span>
+                    </div>
+                  </div>
+                {:else if graph.building}
+                  <div class="small dim">{m.graph_build_busy()}</div>
+                {/if}
+                </div>
               {/if}
-            </button>
+            </div>
           {:else}
             <div class="dim small pad">{m.graph_none()}</div>
           {/each}
@@ -1098,7 +1269,102 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
+    flex: none;
+  }
+  button.item,
+  .rowhead {
     cursor: var(--cursor-pointer, pointer);
+  }
+  .rowhead {
+    appearance: none;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .rowhead .top {
+    flex-wrap: wrap;
+    row-gap: 3px;
+  }
+  .more {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .sups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 6px;
+  }
+  .sup {
+    appearance: none;
+    background: none;
+    border: 0;
+    border-bottom: 1px dotted var(--fg-2);
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    cursor: var(--cursor-pointer, pointer);
+  }
+  .sup:hover {
+    color: var(--warn);
+  }
+  .sup.out {
+    color: var(--warn);
+    text-decoration: line-through;
+  }
+  .create {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .built {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 8px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-1);
+    background: var(--bg-1);
+  }
+  .built .create {
+    margin-top: 2px;
+  }
+  .running {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .spin {
+    width: 10px;
+    height: 10px;
+    flex: none;
+    border: 2px solid var(--line-2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: g-spin 0.9s linear infinite;
+  }
+  @keyframes g-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spin {
+      animation: none;
+    }
+  }
+  .entry {
+    height: 22px;
+    width: 170px;
+    font-size: var(--fs-xs);
   }
   .item:hover {
     background: var(--bg-hover);
