@@ -1,4 +1,5 @@
-import { defaultRequirements, type GraphDoc, type GraphRequirements } from "$lib/graph/types";
+import { invoke } from "@tauri-apps/api/core";
+import { defaultRequirements, type ChainBuildResult, type ChainJob, type GraphDoc, type GraphRequirements } from "$lib/graph/types";
 
 const REQ_KEY = "pob-redux:graph-requirements";
 const DOC_KEY = "pob-redux:graph-doc";
@@ -9,6 +10,9 @@ class GraphStore {
   fileName = $state<string | null>(null);
   loadError = $state<string | null>(null);
   req = $state<GraphRequirements>(defaultRequirements());
+  /** Chain builds asked for in this session, by chain id. They outlive the view, since one takes a minute or two. */
+  jobs = $state<Record<string, ChainJob>>({});
+  readonly building = $derived(Object.values(this.jobs).some((j) => j.status === "running"));
 
   constructor() {
     try {
@@ -27,6 +31,22 @@ class GraphStore {
     try {
       localStorage.setItem(REQ_KEY, JSON.stringify(this.req));
     } catch {}
+  }
+
+  /** Build one chain with exilegen at a level (null: the end level) without the excluded supports. One at a time. */
+  async buildChain(chain: string, level: number | null, excluded: string[]) {
+    if (this.building) return;
+    const job: ChainJob = { status: "running", level, excluded, started: Date.now() };
+    this.jobs = { ...this.jobs, [chain]: job };
+    let next: ChainJob;
+    try {
+      const result = await invoke<ChainBuildResult>("lab_chain_build", { chain, level, excludeSupports: excluded });
+      next = { ...job, status: "done", result };
+    } catch (e) {
+      const err = e as { kind?: string; message?: string } | null;
+      next = { ...job, status: "error", error: String(err?.message ?? e), setup: err?.kind === "setup" };
+    }
+    this.jobs = { ...this.jobs, [chain]: next };
   }
 
   load(text: string, name: string) {

@@ -28,6 +28,8 @@ export interface GraphRequirements {
   leveling_config: Partial<LevelConfig>;
   /** "formula" ranks by the score; "measured" puts chains with the highest PoB-measured gain first; "fitted" ranks by the score fitted to PoB runs. */
   rank_by: "formula" | "measured" | "fitted";
+  /** Support gems (display names) that a build must not socket. Chains that used one are marked, not hidden. */
+  exclude_supports: string[];
 }
 
 /** The score fitted to PoB measurements (exilegen chainfit): what adding the chain is expected to do. */
@@ -72,7 +74,49 @@ export interface ChainMeasured {
   payoff?: number;
   /** gain_fair × state_lift: the chain credited for the state it produces, assuming it is always up. */
   gain_credited?: number;
+  /** PoB share code of the measured chain build (exilegen graphx `--codes`). */
+  code?: string;
   error?: string;
+}
+
+/** One excluded support in a chain build, and what took its place. Null means the plain build was not made. */
+export interface ChainBuildAlternative {
+  excluded: string;
+  was_used: boolean | null;
+  replaced_by: string | null;
+  dps_without_exclusion?: number | null;
+}
+
+/** What `exilegen.lab chain` returns: one chain built at a level without the excluded supports. */
+export interface ChainBuildResult {
+  lab: number;
+  chain: string;
+  main_name: string;
+  level: number;
+  ok: boolean;
+  feasible: boolean;
+  violations: string;
+  code?: string | null;
+  dps: number;
+  ehp?: number | null;
+  supports: string[];
+  excluded: string[];
+  alternatives?: ChainBuildAlternative[];
+  /** The chain's parts; one whose level is above the build's is left out. */
+  parts: (Pick<LevelStep, "kind" | "name" | "level" | "gate"> & { included: boolean })[];
+  seconds: number;
+}
+
+/** A chain build asked for from the Graph view. `setup` marks an error about Python, exilegen or pobctl not being found. */
+export interface ChainJob {
+  status: "running" | "done" | "error";
+  /** Null builds at the generator's end level. */
+  level: number | null;
+  excluded: string[];
+  started: number;
+  result?: ChainBuildResult;
+  error?: string;
+  setup?: boolean;
 }
 
 export interface MeasuredSummary {
@@ -288,5 +332,6 @@ export function defaultRequirements(): GraphRequirements {
     online_by: 0,
     leveling_config: {},
     rank_by: "formula",
+    exclude_supports: [],
   };
 }
