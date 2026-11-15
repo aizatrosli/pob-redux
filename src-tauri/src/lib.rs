@@ -7,6 +7,7 @@ mod game_data;
 mod tree_art;
 mod mcp;
 mod tools;
+mod lab_tools;
 mod library;
 mod ai;
 mod agent;
@@ -22,6 +23,8 @@ mod links;
 mod diagnostics;
 mod game;
 mod trade;
+mod assistant;
+mod threads;
 mod voice;
 
 use std::sync::Arc;
@@ -1273,7 +1276,7 @@ pub fn run() {
             log::info!("game: {}", game.id());
             log::info!("user dir: {}", user_dir.display());
             let rt = boot_runtime(handle, game, &user_dir);
-            downloads::start(handle, game, rt.pob_root.clone());
+            let pob_root = rt.pob_root.clone();
             let session = begin_session(handle);
             app.manage(AppState {
                 rt: std::sync::RwLock::new(rt),
@@ -1285,6 +1288,7 @@ pub fn run() {
                 recovery_pending: std::sync::atomic::AtomicBool::new(session.unclean_exit),
                 session,
             });
+            downloads::start(app.handle(), game, pob_root);
             watch_links(app.handle());
             spawn_pool_reaper(app.handle().clone());
             app.manage(ai::AiState::new(&app.handle().clone()));
@@ -1382,6 +1386,7 @@ pub fn run() {
             agent::agent_stop,
             agent::agent_configure,
             agent::agent_close,
+            agent::agent_resume_id,
             agent::agent_path_set,
             agent::agent_install,
             agent::agent_sign_in,
@@ -1400,6 +1405,15 @@ pub fn run() {
             voice::voice_stop,
             voice::voice_cancel,
             trade::trade_window_open,
+            assistant::assistant_window_open,
+            assistant::assistant_window_close,
+            assistant::main_window_focus,
+            assistant::chat_handoff_put,
+            assistant::chat_handoff_take,
+            threads::threads_list,
+            threads::thread_load,
+            threads::thread_save,
+            threads::thread_delete,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -1407,6 +1421,11 @@ pub fn run() {
             if let tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Destroyed, .. } = &event {
                 if label == "main" {
                     trade::close(app);
+                    assistant::close(app);
+                }
+                // Closed by its own button, the OS or a crash: the main window docks the conversation back.
+                if label == assistant::LABEL {
+                    let _ = app.emit_to("main", "assistant:closed", ());
                 }
             }
             if let tauri::RunEvent::Exit = event {

@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "notes": "Evaluation profiles for search_set_profile. 'base' is 'player' (the build's own active config set) or 'fresh' (a new PoB-default config set). 'carry_prefixes' copies the player's config inputs whose names start with a prefix into a fresh set (quest rewards, bandit and pantheon are character state, not combat assumptions). 'config' sets PoB config vars (ConfigOptions.lua names) on top. 'scoring' is plain data for the caller's scorer; the engine never applies it.",
+  "profiles": {
+    "as_exported": {
+      "description": "The player's own config set, as exported. Includes any conditional toggles the player turned on.",
+      "base": "player",
+      "config": {},
+      "scoring": {
+        "scenario": "as_exported",
+        "enemy_power": 20,
+        "enemy_count": 1,
+        "trusted": false
+      }
+    },
+    "pinnacle_v1": {
+      "description": "Single Pinnacle boss. Fresh PoB-default config (no conditional toggles), character state carried over.",
+      "base": "fresh",
+      "carry_prefixes": ["quest", "bandit", "pantheon"],
+      "config": {
+        "enemyIsBoss": "Pinnacle"
+      },
+      "scoring": {
+        "scenario": "boss",
+        "enemy_power": 20,
+        "enemy_count": 1,
+        "enemy_rarity": "pinnacle",
+        "corpses_available": false,
+        "enemy_cursed_unless_build_curses": false,
+        "trusted": true
+      }
+    },
+    "mapping_v1": {
+      "description": "Normal map pack: a rare monster with magic and normal monsters around it, no boss. Fresh PoB-default config, character state carried over.",
+      "base": "fresh",
+      "carry_prefixes": ["quest", "bandit", "pantheon"],
+      "config": {
+        "enemyIsBoss": "None",
+        "conditionEnemyRareOrUnique": true,
+        "multiplierNearbyEnemies": 8,
+        "multiplierNearbyRareOrUniqueEnemies": 1
+      },
+      "scoring": {
+        "scenario": "mapping",
+        "enemy_power": 10,
+        "enemy_power_pack": { "normal": 1, "magic": 2, "rare": 10 },
+        "enemy_count": 8,
+        "enemy_rarity": "rare",
+        "corpses_available": true,
+        "trusted": true
+      }
+    }
+  }
+}

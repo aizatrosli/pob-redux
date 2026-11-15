@@ -38,12 +38,12 @@
   let stats = $state<Record<string, number>>({});
   let model = $state<TreeModel | null>(null);
   let ascOpen = $state(false);
-  let loadedRev = -1;
+  let loadedKey = "";
 
   $effect(() => {
-    const rev = build.rev;
-    if (!build.loaded || rev === loadedRev) return;
-    loadedRev = rev;
+    const key = `${build.info?.generation}:${build.rev}`;
+    if (!build.loaded || key === loadedKey) return;
+    loadedKey = key;
     Promise.all([engine.buildSummary(), engine.sanityCheck(), engine.listSlots(), engine.getItems(), engine.getStats(FIELDS)])
       .then(([s, c, l, i, st]) => {
         summary = s;
@@ -336,7 +336,7 @@
 
   {#snippet panels(column: Column)}
     {#each overviewLayout.columns[column] as id (id)}
-      <section class="panel" class:dragging={dragging === id} data-sort={id} animate:flip={{ duration: 160 }}>
+      <section class="panel" class:dragging={dragging === id} data-sort={id} animate:flip={{ duration: dragging === id ? 0 : 200 }}>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="ph" onpointerdown={(e) => startDrag(e, id)}>
           <button class="grip" data-grip={id} aria-label={m.ov_move({ section: heads[id].title })} title={m.ov_move({ section: heads[id].title })} onkeydown={(e) => nudge(e, id)}>
@@ -505,7 +505,12 @@
     overflow: hidden;
   }
   .panel.dragging {
-    border-color: var(--focus);
+    position: relative;
+    z-index: 20;
+    opacity: 0.8;
+    box-shadow: var(--shadow-pop);
+    pointer-events: none;
+    will-change: transform;
   }
   .ph {
     display: flex;

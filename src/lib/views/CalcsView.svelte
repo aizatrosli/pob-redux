@@ -499,7 +499,7 @@
                 (sub) => subsectionHasContent(sub) && !isPromotedDamageTakenSubsection(sec, sub.label) && (!needle || subHit(sec, sub)),
               )}
               {@const headerExtra = cardHeaderExtra(sec, head.extra ?? null)}
-                <section class="section" class:table class:dragging={sorting === sec.id} data-sort={sec.id} use:masonryCard animate:flip={{ duration: 160 }}>
+                <section class="section" class:table class:dragging={sorting === sec.id} data-sort={sec.id} use:masonryCard animate:flip={{ duration: sorting === sec.id ? 0 : 200 }}>
                 {#snippet extraText()}<span class="num"><PobText text={headerExtra} /></span>{/snippet}
                 <CardHead
                   {open}
@@ -707,6 +707,10 @@
     flex-direction: column;
     gap: 14px;
     padding: 14px;
+    scrollbar-width: none;
+  }
+  .cards::-webkit-scrollbar {
+    display: none;
   }
   .sectiongrid {
     position: relative;
@@ -848,7 +852,12 @@
     }
   }
   .section.dragging {
-    border-color: var(--focus);
+    position: relative;
+    z-index: 20;
+    opacity: 0.8;
+    box-shadow: var(--shadow-pop);
+    pointer-events: none;
+    will-change: transform;
   }
   .sorting {
     cursor: grabbing;

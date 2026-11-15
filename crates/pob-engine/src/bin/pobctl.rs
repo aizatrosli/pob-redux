@@ -6,6 +6,9 @@
 //!   pobctl --pob-root <dir> call load_build_code '{"code":"..."}'
 //!   pobctl --pob-root <dir> stats path/to/build.xml
 //!   pobctl --pob-root <dir> bench
+//!   pobctl --pob-root <dir> serve --workers 4 --timeout 30
+//!   pobctl --pob-root <dir> optimise build.code --constraint one_button
+//!   pobctl --pob-root <dir> meta-search start overnight --minutes 480
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -13,6 +16,11 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use pob_engine::{Engine, EngineConfig};
 use serde_json::{json, Value};
+
+#[path = "pobctl/lab.rs"]
+mod lab;
+#[path = "pobctl/serve.rs"]
+mod serve;
 
 // Every Lua allocation goes through the global allocator (mlua hands LuaJIT a
 // Rust-backed allocator); the system heap is slow for that and slow to give
@@ -132,6 +140,59 @@ enum Cmd {
         /// Exit with status 1 when the baseline differs.
         #[arg(long)]
         check: bool,
+    },
+    /// Keep engines booted and answer JSON-lines requests on stdin, one reply line each on stdout.
+    ///
+    /// Requests (all may carry "id", echoed in the reply):
+    ///   {"m": "<bridge method>", "p": {...}}    call a bridge method
+    ///   {"lua": "<chunk>"}                       evaluate Lua, as `eval`
+    ///   {"ctl": "ping" | "gc" | "methods" | "shutdown"}
+    /// plus optional "w" (worker index) and "timeout" (seconds, overrides --timeout).
+    /// Replies: {"id", "ok": true, "r": ...} or {"id", "ok": false, "err": "..."}.
+    /// The first line is {"ready": true, "version", "game", "workers", "boot_ms"}.
+    ///
+    /// Each worker is its own engine process holding its own build. A request with
+    /// "w" goes to that worker; without it, requests go round-robin, so a client that
+    /// loads a build and then reads it with more than one worker must pass "w".
+    /// One worker answers in request order; across workers, and for "ping", replies
+    /// can come out of order. A request that runs past its timeout kills its worker,
+    /// which is restarted empty: the reply is {"ok": false, "err": "timeout",
+    /// "restarted": true} and the client must load its build again. "shutdown" (or
+    /// end of input) answers everything queued, then exits. Logs go to stderr.
+    Serve {
+        /// Engine processes.
+        #[arg(long, default_value_t = 1)]
+        workers: usize,
+        /// Seconds a request may run before its worker is restarted; 0 for no limit.
+        #[arg(long, default_value_t = 120.0)]
+        timeout: f64,
+    },
+    /// One `serve` worker.
+    #[command(hide = true)]
+    ServeWorker,
+    /// Optimise a build with exilegen (tree, supports, triggers) under honest scoring; prints JSON.
+    /// Needs Python and an exilegen checkout (POB_LAB_EXILEGEN); lab state in $POB_LAB_DIR or <user dir>/lab.
+    Optimise {
+        /// File holding a PoB share code, or - for stdin.
+        file: PathBuf,
+        /// auto, or a comma list of convert,tree,tree_scratch,supports,triggers.
+        #[arg(long)]
+        steps: Option<String>,
+        #[command(flatten)]
+        scoring: lab::Scoring,
+    },
+    /// Build an idea from nothing with exilegen: a skeleton JSON such as
+    /// {"cls":"Witch","ascendancy":"Lich","main_skill":"SparkPlayer","uniques":["Liminal Coil"]}; prints JSON.
+    Synth {
+        /// Skeleton JSON, or @file.
+        skeleton: String,
+        #[command(flatten)]
+        scoring: lab::Scoring,
+    },
+    /// From-scratch meta search (exilegen's MAP-Elites builder) in a named run directory.
+    MetaSearch {
+        #[command(subcommand)]
+        cmd: lab::MetaSearch,
     },
     /// Unique jewel suggestions: one engine vs the worker pool, with an equality check.
     Jewels {
@@ -795,6 +856,29 @@ fn main() {
         .user_dir
         .unwrap_or_else(|| std::env::temp_dir().join("pob-redux-cli"));
 
+    let cfg = EngineConfig { pob_root: cli.pob_root.clone(), user_dir: user_dir.clone(), cache_dir: cli.cache_dir.clone(), data_dir: None };
+    match &cli.cmd {
+        Cmd::Serve { workers, timeout } => std::process::exit(serve::serve(&cfg, *workers, *timeout)),
+        Cmd::ServeWorker => std::process::exit(serve::worker(cfg)),
+        Cmd::Optimise { .. } | Cmd::Synth { .. } | Cmd::MetaSearch { .. } => {
+            let out = match &cli.cmd {
+                Cmd::Optimise { file, steps, scoring } => lab::optimise(&cli.pob_root, &user_dir, file, steps.clone(), scoring),
+                Cmd::Synth { skeleton, scoring } => lab::synth(&cli.pob_root, &user_dir, skeleton, scoring),
+                Cmd::MetaSearch { cmd } => lab::meta_search(&cli.pob_root, &user_dir, cmd),
+                _ => unreachable!(),
+            };
+            match out {
+                Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
+
     let pooled: Option<Result<Value, pob_engine::Error>> = match &cli.cmd {
         Cmd::Power { file, stat, depth, pool, no_sequential, rounds } => {
             let cfg = EngineConfig { pob_root: cli.pob_root.clone(), user_dir: user_dir.clone(), cache_dir: cli.cache_dir.clone(), data_dir: None };
@@ -908,7 +992,7 @@ fn main() {
                 Ok(json!({ "iterations": iterations, "avg_ms": avg, "min_ms": min, "boot_ms": engine.boot_ms }))
             }),
         Cmd::Eval { code } => engine.eval(&code),
-        Cmd::Power { .. } | Cmd::Gems { .. } | Cmd::Jewels { .. } | Cmd::Plan { .. } | Cmd::Corpus { .. } | Cmd::Golden { .. } => {
+        Cmd::Power { .. } | Cmd::Gems { .. } | Cmd::Jewels { .. } | Cmd::Plan { .. } | Cmd::Corpus { .. } | Cmd::Golden { .. } | Cmd::Serve { .. } | Cmd::ServeWorker | Cmd::Optimise { .. } | Cmd::Synth { .. } | Cmd::MetaSearch { .. } => {
             unreachable!("handled above")
         }
     };

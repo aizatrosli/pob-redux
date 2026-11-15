@@ -125,6 +125,8 @@ bun run ctl -- --pob-root src-tauri/resources/pob methods            # list brid
 bun run ctl -- --pob-root src-tauri/resources/pob call get_build     # call one method
 bun run ctl -- --pob-root src-tauri/resources/pob stats build.xml    # load a build, print its sidebar
 bun run ctl -- --pob-root src-tauri/resources/pob bench              # time full recalculations
+bun run ctl -- --pob-root src-tauri/resources/pob serve --workers 2  # JSON lines on stdin/stdout, engines stay booted (see `serve --help`)
+bun run ctl -- --pob-root src-tauri/resources/pob optimise build.code  # exilegen optimiser sidecar (crates/pob-engine/LAB.md)
 
 # parallel scoring against the sequential path; mismatches must be 0
 bun run ctl -- --pob-root src-tauri/resources/pob power build.xml --stat Life --pool 8

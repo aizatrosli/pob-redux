@@ -12231,4 +12231,8 @@ M.sanity_check = function()
 	return { findings = findings, high = counts.high, medium = counts.medium, low = counts.low }
 end
 
-return M
+-- The second value is what search.lua builds on (see engine.rs).
+return M, {
+	GAME = GAME, IS_POE2 = IS_POE2, refresh = refresh, ensureBuild = ensureBuild, encodeCode = encodeCode,
+	countAllocNodes = countAllocNodes, questPointsForLevel = questPointsForLevel, gemUtil = gemUtil, calcsSelection = calcsSelection,
+}
