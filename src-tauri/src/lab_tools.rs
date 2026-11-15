@@ -125,7 +125,7 @@ pub(crate) fn defs() -> Vec<ToolDef> {
         ),
         def(
             "graph_chains",
-            "Synergy chains from the mechanics graph, the Graph view's list: one part makes a state (a charge, an ailment, Rage) and another pays off on it. Best first, each with `id`, `kind`, `main` skill, `parts`, `links`, `thesis`, `score`, `fitted` (expected damage multiple, fitted to PoB runs), `doubts` (links that do not hold up when their text is read again: say so), `online_level`, `farm` (uniques to find) and `spirit_gems` (heralds and auras that fit, with cost and reason). `measured` is what PoB got for the built chain when `scores` names a run. `chain` returns one chain in full: evidence lines, leveling steps, Spirit gems passed over. Changes nothing; about a second. Build one with chain_build.",
+            "Synergy chains from the mechanics graph, the Graph view's list: one part makes a state (a charge, an ailment, Rage) and another pays off on it. Best first, each with `id`, `kind`, `main` skill, `parts`, `links`, `thesis`, `score`, `fitted` (expected damage multiple, fitted to PoB runs), `doubts` (links that do not hold up when their text is read again: say so), `online_level`, `farm` (uniques to find) and `spirit_gems` (heralds and auras that fit, with cost and reason). Kind `reaction` is a meta gem (Cast on Critical, Cast on Elemental Ailment, ...) casting a second spell from something the main skill does; its `reaction` has the gem, the spell, what feeds it, an Energy estimate, reliability on a boss and whether it is `buildable`: the numbers are estimates, say so. `measured` is what PoB got for the built chain when `scores` names a run. `chain` returns one chain in full: evidence lines, leveling steps, Spirit gems passed over. Changes nothing; about a second. Build one with chain_build.",
             obj(
                 json!({
                     "class": prop("string", "e.g. Witch"),
@@ -134,7 +134,7 @@ pub(crate) fn defs() -> Vec<ToolDef> {
                     "damage_types": with_desc(strings(), "Main skill deals one of: Fire, Cold, Lightning, Physical, Chaos"),
                     "uniques": with_desc(strings(), "Chains must use one of these"),
                     "keystones": with_desc(strings(), "Chains must use one of these"),
-                    "kinds": json!({ "type": "array", "items": { "type": "string", "enum": ["self_feed", "enabler", "graft", "bridge"] } }),
+                    "kinds": json!({ "type": "array", "items": { "type": "string", "enum": ["self_feed", "enabler", "graft", "bridge", "reaction"] } }),
                     "online_by": prop("integer", "Only chains complete by this character level"),
                     "level": prop("integer", "Pick Spirit gems for the Spirit held at this level"),
                     "spirit_gear": prop("integer", "Spirit from equipment, with `level`"),

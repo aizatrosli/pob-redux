@@ -76,7 +76,23 @@
     enabler: m.graph_kind_enabler(),
     graft: m.graph_kind_graft(),
     bridge: m.graph_kind_bridge(),
+    reaction: m.graph_kind_reaction(),
   });
+
+  function reactionLines(c: GraphChain): string[] {
+    const r = c.reaction;
+    if (!r) return [];
+    const e = r.energy;
+    const out = [
+      m.graph_reaction_line({ meta: r.meta_name, spell: r.spell_names.join(" + "), event: r.event_label, spirit: String(r.spirit) }),
+      m.graph_reaction_energy({ per_event: String(e.per_event), per_cast: String(e.per_cast), events: e.events_per_cast == null ? "?" : String(e.events_per_cast), assumes: e.assumes, boss: pct(r.boss), clearing: pct(r.clearing) }),
+    ];
+    if (e.scaled) out.push(m.graph_reaction_scaled({ how: e.scaled }));
+    if (r.ladder_builds > 0) out.push(m.graph_reaction_ladder({ n: String(r.ladder_builds), meta: r.meta_name, spell: r.spell_names[0] }));
+    if (!r.modelled) out.push(m.graph_reaction_unmodelled({ meta: r.meta_name }));
+    if (!r.buildable) out.push(m.graph_reaction_not_buildable({ meta: r.meta_name, source: r.source.name ?? "" }));
+    return out;
+  }
 
   function gateText(c: GateCheck): { label: string; detail: string } {
     const v = c.values ?? {};
@@ -1009,6 +1025,7 @@
                   {#if c.tempo.tempo < 1}<div class="small warnline">{factorsLine(c)}</div>{/if}
                 {/if}
                 {#if c.predicted}<div class="small mono pobline">{predictedLine(c.predicted)}</div>{/if}
+                {#if c.reaction}{#each reactionLines(c) as line (line)}<div class="small selectable">{line}</div>{/each}{/if}
                 {#if c.doubts?.length}{#each c.doubts as line (line)}<div class="small selectable">{m.graph_doubt_line({ line })}</div>{/each}{/if}
                 {#if c.ladder}{#each ladderLines(c.ladder) as line (line)}<div class="small dim selectable">{line}</div>{/each}{/if}
                 {#if c.measured}
@@ -1055,7 +1072,7 @@
                 {/if}
                 {#each c.evidence as ev (ev)}<div class="small dim selectable ev">{ev}</div>{/each}
                 <div class="create">
-                  <button class="btn sm on" disabled={graph.building} onclick={() => createBuild(c)}>{canOpenMeasured(c) ? m.graph_build_open_measured() : m.graph_build_create()}</button>
+                  <button class="btn sm on" disabled={graph.building || c.reaction?.buildable === false} onclick={() => createBuild(c)}>{canOpenMeasured(c) ? m.graph_build_open_measured() : m.graph_build_create()}</button>
                   <select class="select" aria-label={m.graph_build_level()} bind:value={levelChoice} disabled={graph.building}>
                     {#if c.leveling}
                       <option value="start">{m.graph_build_level_start({ level: c.leveling.start_level })}</option>

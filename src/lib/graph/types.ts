@@ -372,6 +372,8 @@ export interface GraphChain {
   /** Reasons to doubt the chain itself (a link its own text does not bear out). */
   doubts?: string[];
   spirit?: ChainSpirit;
+  /** Kind "reaction": the meta gem that casts a second spell from an event of the main skill. */
+  reaction?: ChainReaction;
   predicted?: ChainPredicted;
   formula_rank?: number;
   thesis: string;
@@ -411,8 +413,32 @@ export interface GraphDoc {
   ladder?: { nodes: GraphNode[]; edges: GraphEdge[]; kits: GraphKit[]; gaps: GraphGap[]; info: Record<string, unknown> };
 }
 
+/** A meta gem ("Cast on ...") fed by the main skill. The numbers are estimates: PoB calculates no Energy. */
+export interface ChainReaction {
+  meta: string;
+  meta_name: string;
+  spells: string[];
+  spell_names: string[];
+  event: string;
+  event_label: string;
+  /** Energy against a boss from the gem's own stats: per event, per cast of the spell, events for one cast. */
+  energy: { per_event: number; per_cast: number; events_per_cast: number | null; assumes: string; bank?: number; scaled?: string };
+  /** exilegen's scoring has an Energy model for this meta gem (Cast on Critical, Cast on Elemental Ailment). */
+  modelled: boolean;
+  /** False when the meta gem comes from an item or a notable: shown, not built yet. */
+  buildable: boolean;
+  /** Judged reliability of the event, 0..1. */
+  boss: number;
+  clearing: number;
+  spirit: number;
+  source: { kind: "gem" | "unique" | "asc" | "base"; name?: string; ascendancy?: string };
+  ladder_builds: number;
+  payoff: "state" | "loop" | "damage";
+  state?: string;
+}
+
 export const DAMAGE_TYPES = ["Physical", "Fire", "Cold", "Lightning", "Chaos"] as const;
-export const CHAIN_KINDS = ["self_feed", "enabler", "graft", "bridge"] as const;
+export const CHAIN_KINDS = ["self_feed", "enabler", "graft", "bridge", "reaction"] as const;
 export const CONSTRAINT_CHOICES = ["one_button", "no_cast", "no_cast:strict", "no_minions"] as const;
 
 export function defaultRequirements(): GraphRequirements {
