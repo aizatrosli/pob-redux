@@ -191,9 +191,14 @@ local function applyGemChanges(changes, groupEnabled)
 					error("unknown group " .. tostring(c.group), 0)
 				end
 			end
-			if g.source then error("group " .. gi .. " is granted by an item or node and cannot be changed", 0) end
-			touch(g)
 			local slot = tonumber(c.slot) or (#g.gemList + 1)
+			-- An item- or node-granted group keeps its granted skill in slot 1, but takes supports in the
+			-- other slots as in PoB's skills tab, unless the grant says noSupports.
+			if g.source and (g.noSupports or slot <= 1) then
+				error("group " .. gi .. " is granted by an item or node: " ..
+					(g.noSupports and "its skill cannot be supported" or "slot 1 (the granted skill) cannot be changed"), 0)
+			end
+			touch(g)
 			local old = g.gemList[slot]
 			if c.gem == false or c.remove == true then
 				if old then removals[#removals + 1] = { g = g, slot = slot } end
@@ -685,7 +690,7 @@ local function marginals(override, main)
 	local out = array({})
 	for _, gi in ipairs(groups) do
 		local g = list[gi]
-		if g and not g.source then
+		if g and not g.noSupports then
 			local isMeta = groupMeta(g) ~= nil
 			local gBase = isMeta and groupDps(gi, override) or nil
 			for slot, gem in ipairs(g.gemList) do
@@ -1296,6 +1301,7 @@ local function skillsView()
 			enabled = g.enabled ~= false, main = S.main and S.main.group == gi or false, pobMain = S.pobMain == gi,
 			mainActiveSkill = g.mainActiveSkill or 1, includeInFullDPS = g.includeInFullDPS == true,
 			grantedBy = g.source and ((src and (src.title or src.name)) or tostring(g.source)) or null,
+			noSupports = g.noSupports and true or false,
 			metaGroup = groupMeta(g) ~= nil, gems = gems, skills = skills,
 		}
 	end
