@@ -2,7 +2,7 @@
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import GraphCanvas, { type DrawEdge, type DrawNode } from "$lib/graph/GraphCanvas.svelte";
   import { exportCommand, gate, gateOpen, matchingChains, type GateCheck } from "$lib/graph/requirements";
-  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type ChainJob, type ChainMeasured, type ChainPredicted, type LevelStep, type MeasuredSummary, type SkillTempo } from "$lib/graph/types";
+  import { CHAIN_KINDS, CONSTRAINT_CHOICES, DAMAGE_TYPES, type CheckStatus, type GraphChain, type GraphGap, type GraphKit, type ChainJob, type ChainMeasured, type ChainLadder, type ChainPredicted, type LevelStep, type MeasuredSummary, type SkillTempo } from "$lib/graph/types";
   import { defaultLevelConfig, levelConfig } from "$lib/graph/leveling";
   import type { LevelConfig } from "$lib/graph/types";
   import { graph } from "$lib/state/graph.svelte";
@@ -397,6 +397,16 @@
     if (mm.gain_credited != null) return { text: m.graph_measured_tag({ gain: times(mm.gain_credited) }), tone: mm.gain_credited >= 1.1 ? "good" : mm.gain_credited <= 0.9 ? "bad" : "" };
     return mm.built && mm.dps > 0 ? { text: m.graph_measured_tag_built(), tone: "" } : { text: m.graph_measured_tag_failed(), tone: "bad" };
   }
+  function ladderLines(l: ChainLadder): string[] {
+    if (!l.known || l.share == null) return [m.graph_ladder_absent()];
+    const out = [m.graph_ladder_share({ pct: (l.share * 100).toFixed(1), rank: l.rank ?? 0, n: l.n ?? 0 })];
+    if (l.dps_median) out.push(l.dps_vs_median != null ? m.graph_ladder_dps_ratio({ dps: whole(l.dps_median), ratio: times(l.dps_vs_median) }) + (l.thin ? ` ${m.graph_ladder_thin()}` : "") : m.graph_ladder_dps({ dps: whole(l.dps_median) }));
+    if (l.supports?.length) out.push(m.graph_ladder_supports({ list: l.supports.join(", ") }));
+    if (l.uniques?.length) out.push(m.graph_ladder_uniques({ list: l.uniques.join(", ") }));
+    if (l.paired?.length) out.push(m.graph_ladder_paired({ list: l.paired.join(", ") }));
+    return out;
+  }
+  const ladderTag = (l: ChainLadder) => (l.cls === "meta" ? m.graph_ladder_tag_meta() : l.cls === "off-meta skill" ? m.graph_ladder_tag_off() : m.graph_ladder_tag_new());
   function predictedLine(p: ChainPredicted): string {
     const why = p.why.map((w) => `${w.part.replace(/^[a-z]+:/, "")} ${times(w.effect)}`).join(", ");
     return m.graph_predicted_line({ gain: times(p.gain), works: pct(p.works) }) + (why ? ` · ${why}` : "");
@@ -845,6 +855,7 @@
                 {#if c.measured}{@const t = measuredTag(c.measured)}<span class="tag pob" class:good={t.tone === "good"} class:bad={t.tone === "bad"} title={m.graph_measured_tag_title()}>{t.text}</span>{/if}
                 {#if c.measured?.supports && c.measured.dps > 0}<span class="tag" class:cut={c.measured.supports.length === 0} title={c.measured.supports.join(", ") || m.graph_measured_supports_none()}>{m.graph_supports_tag({ n: c.measured.supports.length })}</span>{/if}
                 {#if hit.length}<span class="tag cut" title={m.graph_excluded_tag_title({ list: hit.join(", ") })}>{m.graph_excluded_tag()}</span>{/if}
+                {#if c.ladder}<span class="tag" class:good={c.ladder.cls === "meta"} title={m.graph_ladder_tag_title()}>{ladderTag(c.ladder)}</span>{/if}
                 {#if c.predicted && !c.measured}<span class="tag" title={m.graph_predicted_tag_title()}>{m.graph_predicted_tag({ gain: times(c.predicted.score) })}</span>{/if}
                 {#if c.leveling}<span class="tag" class:cut={c.leveling.unobtainable || c.leveling.farm.length > 0} title={m.graph_level_tag_title({ level: c.leveling.online_level })}>{m.graph_level_tag({ level: c.leveling.online_level })}</span>{/if}
                 <span class="mono small" title={m.graph_chain_score_title()}>{c.score.toFixed(2)}</span>
@@ -861,6 +872,7 @@
                   {#if c.tempo.tempo < 1}<div class="small warnline">{factorsLine(c)}</div>{/if}
                 {/if}
                 {#if c.predicted}<div class="small mono pobline">{predictedLine(c.predicted)}</div>{/if}
+                {#if c.ladder}{#each ladderLines(c.ladder) as line (line)}<div class="small dim selectable">{line}</div>{/each}{/if}
                 {#if c.measured}
                   {#each measuredLines(c.measured) as line (line)}<div class="small mono pobline">{line}</div>{/each}
                   {#if c.measured.supports?.length && c.measured.built && c.measured.dps > 0}

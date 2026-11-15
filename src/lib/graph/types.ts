@@ -44,6 +44,26 @@ export interface ChainPredicted {
   why: { part: string; effect: number }[];
 }
 
+/** How the chain sits against the poe.ninja ladder sample (strong builds from the top of the experience ladder). */
+export interface ChainLadder {
+  cls: "meta" | "known skill, new pairing" | "off-meta skill";
+  known: boolean;
+  /** Share of ladder characters using the main skill (0 to 1), its rank by share, and sampled builds. */
+  share?: number;
+  rank?: number;
+  n?: number;
+  /** What ladder builds of this skill socket and wear most. */
+  supports?: string[];
+  uniques?: string[];
+  dps_median?: number;
+  dps_p90?: number;
+  /** Chain build DPS over the ladder median for the skill, same damage measure. */
+  dps_vs_median?: number;
+  thin?: boolean;
+  /** Chain parts that ladder builds of this skill commonly hold. */
+  paired?: string[];
+}
+
 /** What PoB said when the chain was built for real (exilegen chainscore). */
 export interface ChainMeasured {
   built: boolean;
@@ -271,6 +291,7 @@ export interface GraphChain {
   tempo?: ChainTempo;
   leveling?: ChainLeveling;
   measured?: ChainMeasured;
+  ladder?: ChainLadder;
   predicted?: ChainPredicted;
   formula_rank?: number;
   thesis: string;
