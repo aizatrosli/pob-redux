@@ -43,7 +43,9 @@ equip_from_item_db and its `variants`. For one specific item, list_bases \
 then list_affixes for the mod pool, then craft_rare, which builds it from PoB's own affix tables. For a \
 whole-build search, optimise_build reworks tree, supports and triggers under honest scoring (locked boss \
 config, conditional gems discounted, trigger energy), build_from_idea builds a class + skill + uniques idea \
-from nothing, and meta_search_start runs a background search for new archetypes; these take minutes. Before a \
+from nothing, and meta_search_start runs a background search for new archetypes; these take minutes. For \
+ideas, graph_chains lists the mechanics graph's synergy chains (what makes a state and what pays off on it, \
+with the Spirit gems that fit and any doubt about a link), and chain_build builds one. Before a \
 run of changes call checkpoint; every write returns `stats` and a `delta` \
 against the previous state, and rollback restores a checkpoint if the result is worse. Manage alternate \
 trees and gear sets with the list/select/create/copy/rename/delete _spec and _item_set tools. Use \

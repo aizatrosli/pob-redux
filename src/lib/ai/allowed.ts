@@ -68,6 +68,10 @@ export const ALLOWED = new Set([
   "optimise_build",
   "meta_search_status",
   "meta_search_results",
+  // The Graph view's chains for the assistant: the list reads, the build
+  // checkpoints before it opens a result.
+  "graph_chains",
+  "chain_build",
   "set_gem_levels",
   "unequip_item",
   "set_flask_active",

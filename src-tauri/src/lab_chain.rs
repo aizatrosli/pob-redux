@@ -31,7 +31,7 @@ fn setup(message: String) -> ChainBuildError {
 
 /// Arguments of `exilegen.lab chain` for one request. No `level` builds at the generator's end level.
 /// Spirit gems are added exactly as named, with `spirit_gear` Spirit assumed from equipment.
-fn chain_args(chain: &str, level: Option<u32>, exclude_supports: &[String], spirit_gems: &[String], spirit_gear: u32) -> Vec<String> {
+pub(crate) fn chain_args(chain: &str, level: Option<u32>, exclude_supports: &[String], spirit_gems: &[String], spirit_gear: u32) -> Vec<String> {
     let mut args = vec!["chain".to_string(), "--chain".to_string(), chain.to_string()];
     if let Some(level) = level {
         args.push("--level".into());
