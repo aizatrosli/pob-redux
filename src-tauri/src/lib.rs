@@ -7,6 +7,7 @@ mod game_data;
 mod tree_art;
 mod mcp;
 mod tools;
+mod lab_chain;
 mod lab_tools;
 mod library;
 mod ai;
@@ -1344,6 +1345,7 @@ pub fn run() {
             read_text_file,
             write_text_file,
             fetch_build_code,
+            lab_chain::lab_chain_build,
             mobalytics_resolve,
             maxroll_resolve,
             ggg::ggg_account,
