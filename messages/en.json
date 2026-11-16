@@ -1879,6 +1879,7 @@
   "graph_check_unmet": "Not met",
   "graph_paused": "The graph is paused",
   "graph_paused_hint": "Fix this on the left and the graph comes back by itself.",
+  "graph_paused_show_all": "Clear the filters and show all {n} chains",
   "graph_req_mana": "Mana per second",
   "graph_req_spirit": "Spirit",
   "graph_gate_budget": "Chains are weighted by cost, cast time and cooldown",

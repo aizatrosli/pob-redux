@@ -960,6 +960,9 @@
               <div class="label">{m.graph_paused()}</div>
               {@render checkList(failing)}
               <div class="dim small">{m.graph_paused_hint()}</div>
+              {#if (graph.doc?.mechanics?.chains.length ?? 0) > 0}
+                <div><button class="btn sm on" onclick={() => graph.showAll()}>{m.graph_paused_show_all({ n: String(graph.doc?.mechanics?.chains.length ?? 0) })}</button></div>
+              {/if}
             </div>
           </div>
         {/if}
