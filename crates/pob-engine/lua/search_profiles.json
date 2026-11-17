@@ -42,8 +42,8 @@
       },
       "scoring": {
         "scenario": "mapping",
-        "enemy_power": 10,
-        "enemy_power_pack": { "normal": 1, "magic": 2, "rare": 10 },
+        "enemy_power": 5,
+        "enemy_power_pack": { "normal": 1, "magic": 2, "rare": 5 },
         "enemy_count": 8,
         "enemy_rarity": "rare",
         "corpses_available": true,
