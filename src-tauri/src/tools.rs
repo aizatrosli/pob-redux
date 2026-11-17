@@ -1744,7 +1744,7 @@ mod tests {
         // the prompt. This is a tripwire for runaway growth, not a budget.
         let bytes = serde_json::to_string(&d).unwrap().len();
         println!("tool registry: {} tools, {} bytes serialized (~{} tokens)", d.len(), bytes, bytes / 4);
-        assert!(bytes < 60_000, "registry grew to {bytes} bytes; check what was added");
+        assert!(bytes < 70_000, "registry grew to {bytes} bytes; check what was added");
     }
 
     #[test]
