@@ -1347,6 +1347,7 @@ pub fn run() {
             write_text_file,
             fetch_build_code,
             lab_chain::lab_chain_build,
+            lab_chain::lab_chain_score,
             mobalytics_resolve,
             maxroll_resolve,
             ggg::ggg_account,

@@ -32,7 +32,10 @@
   }
   const lvl = (e: Event, lo = 1, hi = 100) => Math.min(hi, Math.max(lo, Math.round(Number((e.currentTarget as HTMLInputElement).value) || lo)));
   const pctIn = (e: Event) => Math.min(100, Math.max(1, Math.round(Number((e.currentTarget as HTMLInputElement).value) || 1))) / 100;
-  const doc = $derived(graph.doc);
+  const doc = $derived(graph.view);
+  $effect(() => {
+    if (graph.doc) void graph.loadScores();
+  });
   const checks = $derived(gate(doc, req, game.current));
   const open = $derived(gateOpen(checks));
   const chains = $derived(matchingChains(doc, req));
@@ -444,6 +447,12 @@
   async function openBuild(code: string, name: string) {
     if (build.info?.unsaved && !(await confirm.ask({ title: m.graph_build_replace_title(), message: m.graph_build_replace_message(), ok: m.graph_build_replace_ok(), cancel: m.graph_build_replace_cancel() }))) return;
     await build.loadCode(code, name);
+  }
+  /** How many chains one press of "Score chains" takes on: each needs a minute or two. */
+  const SCORE_BATCH = 20;
+  const unscored = $derived(listedChains.filter((c) => !c.measured && c.reaction?.buildable !== false).slice(0, SCORE_BATCH));
+  function scoreListed() {
+    void graph.scoreChains(unscored.map((c) => c.id));
   }
   function createBuild(c: GraphChain) {
     if (canOpenMeasured(c)) void openBuild(c.measured!.code!, c.main_name);
@@ -995,6 +1004,16 @@
             {#if measuredInfo.compared}{m.graph_measured_summary({ better: measuredInfo.better_by_10pct, worse: measuredInfo.worse_by_10pct, compared: measuredInfo.compared })}{/if}
           </div>
         {/if}
+        <div class="small pad score-line">
+          {#if graph.scoring}
+            <span>{m.graph_score_running({ done: graph.scoring.done, total: graph.scoring.total, s: Math.max(0, Math.round((now - graph.scoring.started) / 1000)) })}</span>
+            <button class="btn sm" disabled={graph.scoring.stop} onclick={() => graph.stopScoring()}>{graph.scoring.stop ? m.graph_score_stopping() : m.graph_score_stop()}</button>
+          {:else}
+            <button class="btn sm" disabled={graph.building || unscored.length === 0} title={m.graph_score_hint()} onclick={scoreListed}>{unscored.length ? m.graph_score_start({ n: unscored.length }) : m.graph_score_none()}</button>
+            <span class="dim">{m.graph_score_hint()}</span>
+          {/if}
+          {#if graph.scoreError}<div class="small mono pobline warnline">{graph.scoreError.setup ? m.graph_score_setup() : m.graph_score_failed({ error: graph.scoreError.message })}</div>{/if}
+        </div>
         <div class="list">
           {#each listedChains as c (c.id)}
             {@const hit = usedExcluded(c)}
@@ -1076,6 +1095,7 @@
                 {#each c.evidence as ev (ev)}<div class="small dim selectable ev">{ev}</div>{/each}
                 <div class="create">
                   <button class="btn sm on" disabled={graph.building || c.reaction?.buildable === false} onclick={() => createBuild(c)}>{canOpenMeasured(c) ? m.graph_build_open_measured() : m.graph_build_create()}</button>
+                  <button class="btn sm" disabled={graph.building || c.reaction?.buildable === false} title={m.graph_score_one_hint()} onclick={() => graph.scoreChains([c.id], !!c.measured)}>{c.measured ? m.graph_score_again() : m.graph_score_one()}</button>
                   <select class="select" aria-label={m.graph_build_level()} bind:value={levelChoice} disabled={graph.building}>
                     {#if c.leveling}
                       <option value="start">{m.graph_build_level_start({ level: c.leveling.start_level })}</option>
@@ -1629,6 +1649,12 @@
   }
   .pobline {
     color: var(--fg-0);
+  }
+  .score-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
   }
   .measured-line {
     padding-top: 0;

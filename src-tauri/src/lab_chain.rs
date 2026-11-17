@@ -1,5 +1,5 @@
-//! The Graph view's "Create build": builds one chain with exilegen (`python -m exilegen.lab chain`)
-//! through the lab client. PoE2 only, as the rest of the lab.
+//! The Graph view's "Create build" and "Score chains": builds or measures chains with exilegen
+//! (`python -m exilegen.lab chain` / `score`) through the lab client. PoE2 only, as the rest of the lab.
 
 use std::time::Duration;
 
@@ -81,9 +81,53 @@ pub(crate) async fn lab_chain_build(
         .map_err(failed)
 }
 
+/// Arguments of `exilegen.lab score`: measure these chains into `out`, or only read it when none is named.
+pub(crate) fn score_args(chains: &[String], out: &std::path::Path, again: bool) -> Vec<String> {
+    let mut args = vec!["score".to_string(), "--out".to_string(), out.to_string_lossy().into_owned()];
+    for id in chains {
+        args.push("--chain".into());
+        args.push(id.clone());
+    }
+    if again && !chains.is_empty() {
+        args.push("--again".into());
+    }
+    args
+}
+
+/// Measure chains the way a scoring run does (the chain build, the same character without the chain,
+/// the chain's states on) and return what is now known about them. With no chain it returns every
+/// measurement the app has kept. A few chains at a time: each takes a minute or two.
+#[tauri::command]
+pub(crate) async fn lab_chain_score(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    chains: Vec<String>,
+    again: Option<bool>,
+) -> Result<Value, ChainBuildError> {
+    if state.game() != Game::Poe2 {
+        return Err(failed("chain scoring is PoE2 only".into()));
+    }
+    let dir = app.path().app_data_dir().map_err(|e| failed(e.to_string()))?.join("lab");
+    let lab = LabConfig::discover(&state.pob_root(), &dir, None).map_err(setup)?;
+    let args = score_args(&chains, &dir.join("scores"), again.unwrap_or(false));
+    tauri::async_runtime::spawn_blocking(move || lab.run(&args, Some(Duration::from_secs(2400))))
+        .await
+        .map_err(|e| failed(e.to_string()))?
+        .map_err(failed)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{chain_args, failed};
+    use super::{chain_args, failed, score_args};
+
+    #[test]
+    fn score_args_name_each_chain() {
+        let out = std::path::Path::new("lab").join("scores");
+        let dir = out.to_string_lossy().into_owned();
+        assert_eq!(score_args(&[], &out, true), ["score", "--out", dir.as_str()]);
+        assert_eq!(score_args(&["ed0b".into(), "77aa".into()], &out, false), ["score", "--out", dir.as_str(), "--chain", "ed0b", "--chain", "77aa"]);
+        assert_eq!(score_args(&["ed0b".into()], &out, true), ["score", "--out", dir.as_str(), "--chain", "ed0b", "--again"]);
+    }
 
     #[test]
     fn args_follow_the_lab_command() {

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { CHAIN_KINDS, defaultRequirements, type ChainBuildResult, type ChainJob, type GraphDoc, type GraphRequirements } from "$lib/graph/types";
+import { CHAIN_KINDS, defaultRequirements, type ChainBuildResult, type ChainJob, type ChainMeasured, type GraphDoc, type GraphRequirements } from "$lib/graph/types";
 
 const REQ_KEY = "pob-redux:graph-requirements";
 const DOC_KEY = "pob-redux:graph-doc";
@@ -26,7 +26,20 @@ class GraphStore {
   req = $state<GraphRequirements>(defaultRequirements());
   /** Chain builds asked for in this session, by chain id. They outlive the view, since one takes a minute or two. */
   jobs = $state<Record<string, ChainJob>>({});
-  readonly building = $derived(Object.values(this.jobs).some((j) => j.status === "running"));
+  /** What "Score chains" measured, by chain id. Kept by the app between sessions (the lab's scores folder). */
+  scores = $state.raw<Record<string, ChainMeasured>>({});
+  /** The scoring in progress: `done` of `total` chains measured so far. */
+  scoring = $state<{ total: number; done: number; stop: boolean; started: number } | null>(null);
+  scoreError = $state<{ message: string; setup: boolean } | null>(null);
+  readonly building = $derived(this.scoring != null || Object.values(this.jobs).some((j) => j.status === "running"));
+  /** The file with the app's own measurements laid over it: a chain measured here shows that result. */
+  readonly view = $derived.by((): GraphDoc | null => {
+    const doc = this.doc;
+    const chains = doc?.mechanics?.chains;
+    if (!doc || !chains || !chains.some((c) => this.scores[c.id])) return doc;
+    return { ...doc, mechanics: { ...doc.mechanics!, chains: chains.map((c) => (this.scores[c.id] ? { ...c, measured: this.scores[c.id] } : c)) } };
+  });
+  #scoresLoaded = false;
 
   constructor() {
     try {
@@ -81,6 +94,42 @@ class GraphStore {
       next = { ...job, status: "error", error: String(err?.message ?? e), setup: err?.kind === "setup" };
     }
     this.jobs = { ...this.jobs, [chain]: next };
+  }
+
+  /** Read the measurements the app kept from earlier sessions. Quiet when the lab is not set up. */
+  async loadScores() {
+    if (this.#scoresLoaded) return;
+    this.#scoresLoaded = true;
+    try {
+      const got = await invoke<{ measured?: Record<string, ChainMeasured> }>("lab_chain_score", { chains: [] });
+      this.scores = { ...(got.measured ?? {}), ...this.scores };
+    } catch {}
+  }
+
+  /**
+   * Measure chains with exilegen, two at a time, the way a scoring run does: the chain build, the same character
+   * without the chain, and the chain's states switched on. Stops after the pair in flight when asked to.
+   */
+  async scoreChains(ids: string[], again = false) {
+    if (this.building || !ids.length) return;
+    this.scoreError = null;
+    this.scoring = { total: ids.length, done: 0, stop: false, started: Date.now() };
+    try {
+      for (let i = 0; i < ids.length && !this.scoring.stop; i += 2) {
+        const chains = ids.slice(i, i + 2);
+        const got = await invoke<{ measured?: Record<string, ChainMeasured> }>("lab_chain_score", { chains, again });
+        this.scores = { ...this.scores, ...(got.measured ?? {}) };
+        this.scoring = { ...this.scoring, done: Math.min(ids.length, i + chains.length) };
+      }
+    } catch (e) {
+      const err = e as { kind?: string; message?: string } | null;
+      this.scoreError = { message: String(err?.message ?? e), setup: err?.kind === "setup" };
+    }
+    this.scoring = null;
+  }
+
+  stopScoring() {
+    if (this.scoring) this.scoring = { ...this.scoring, stop: true };
   }
 
   load(text: string, name: string) {
