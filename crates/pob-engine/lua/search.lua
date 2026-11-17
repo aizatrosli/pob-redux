@@ -279,6 +279,8 @@ local function classify(as, inMeta)
 	local f = as.skillFlags or {}
 	local function h(n) return has(t, n) or has(gt, n) end
 	if h("Triggered") or h("InbuiltTrigger") or (inMeta and not isMetaGemEffect(ge)) then return "triggered" end
+	-- Invocations store energy until you press them (wiki Invocation), so they are a button
+	if isMetaGemEffect(ge) and h("Invocation") then return "manual" end
 	if h("Persistent") or h("HasReservation") then return "persistent" end
 	if h("Minion") or h("CreatesMinion") or h("SummonsTotem") or h("Trapped") or h("RemoteMined") or f.totem or f.trap or f.mine or f.minion then return "proxy" end
 	return "manual"
@@ -433,24 +435,41 @@ local function oneCopyOnly(gd)
 	return false
 end
 
+local HIT_TYPES = { "Physical", "Lightning", "Cold", "Fire", "Chaos" }
+local function storedSum(o, key)
+	local sum, any = 0, false
+	for _, t in ipairs(HIT_TYPES) do
+		local v = num(o[t .. key])
+		if v then sum, any = sum + v, true end
+	end
+	return any and sum or nil
+end
+-- attacks: PoB keeps per-hit facts under MainHand / OffHand (main hand first)
+local function hitSrc(o)
+	if storedSum(o, "StoredCritAvg") == nil and type(o.MainHand) == "table" and storedSum(o.MainHand, "StoredCritAvg") then return o.MainHand end
+	return o
+end
+
 local function offenceFacts(o)
 	local avgHit = n0(o.AverageHit)
+	if avgHit <= 0 and type(o.MainHand) == "table" then avgHit = n0(o.MainHand.AverageHit) end
 	local hitChance = num(o.HitChance) or 100
 	local hps
 	if avgHit > 0 and n0(o.TotalDPS) > 0 then hps = n0(o.TotalDPS) / avgHit else hps = n0(o.Speed) * hitChance / 100 end
 	local function pct(k) local v = num(o[k]); return v and math.min(v, 100) or 0 end
 	return {
-		speed = n0(o.Speed), hitSpeed = num(o.HitSpeed), hitChance = hitChance, hitsPerSec = hps,
+		speed = n0(o.Speed), hitSpeed = num(o.HitSpeed), cooldown = num(o.Cooldown), hitChance = hitChance, hitsPerSec = hps,
 		averageHit = avgHit, critChance = pct("CritChance"), critMultiplier = num(o.CritMultiplier),
 		shockChance = pct("ShockChance"), igniteChance = pct("IgniteChance"), freezeChance = pct("FreezeChance"),
 		chillChance = pct("ChillChance"), electrocuteChance = pct("ElectrocuteChance"),
 		bleedChance = pct("BleedChance"), poisonChance = pct("PoisonChance"),
 		skillTriggerRate = num(o.SkillTriggerRate), effectiveSourceRate = num(o.EffectiveSourceRate), triggerRateCap = num(o.TriggerRateCap),
-		-- energy scaling facts: Cast on Critical gains energy scaled by the share of the enemy's Ailment Threshold
-		-- the crit deals; AverageHit = nonCrit x CritEffect, a crit = nonCrit x CritMultiplier
-		critHit = (avgHit > 0 and num(o.CritEffect) and o.CritEffect > 0 and num(o.CritMultiplier)) and avgHit / o.CritEffect * o.CritMultiplier or null,
-		fireHit = num(o.FireHitAverage) or null,
-		enemyAilmentThreshold = num(o.EnemyAilmentThreshold) or null,
+		-- energy scaling facts (wiki Cast on Critical): energy per crit = Power x raw crit hit (before mitigation)
+		-- / enemy ailment threshold. PoB keeps pre-mitigation per-type averages as <Type>StoredCritAvg (crits) and
+		-- <Type>StoredCombinedAvg; attacks keep them under MainHand/OffHand only.
+		critHit = storedSum(hitSrc(o), "StoredCritAvg") or null,
+		fireHit = num(hitSrc(o).FireStoredCombinedAvg) or null,
+		enemyAilmentThreshold = num(o.EnemyAilmentThreshold) or num(hitSrc(o).EnemyAilmentThreshold) or null,
 	}
 end
 
@@ -546,6 +565,49 @@ local function energyStatList(ge, level)
 	return out
 end
 
+-- "Socketed Skills deal X% less Damage": the meta gem's support half carries trigger_meta_gem_damage_+%_final,
+-- which PoB never maps (Cast on Critical -20). Returns the multiplier for the socketed spells.
+local function metaSocketedDamageMore(mg)
+	local gd = mg and mg.gemData
+	local v = 0
+	for _, k in ipairs({ "additionalGrantedEffectId1", "additionalGrantedEffectId2" }) do
+		local ge = gd and gd[k] and data.skills[gd[k]]
+		if ge then v = v + levelStat(ge, "trigger_meta_gem_damage_+%_final", mg.level) end
+	end
+	return 1 + v / 100
+end
+
+-- energy lines from allocated passives and equipped items, which PoB does not parse:
+-- "Meta Skills gain X% increased/more Energy", "X% chance for Trigger skills to refund half of Energy Spent"
+local function globalEnergyMods()
+	local r = { inc = 0, more = 0, refund = 0, lines = array({}) }
+	local function scan(line)
+		if type(line) ~= "string" then return end
+		local l = line:lower()
+		local v = l:match("meta skills gain (%d+)%% increased energy")
+		if v then r.inc = r.inc + tonumber(v); r.lines[#r.lines + 1] = line end
+		v = l:match("meta skills gain (%d+)%% more energy")
+		if v then r.more = r.more + tonumber(v); r.lines[#r.lines + 1] = line end
+		v = l:match("(%d+)%% chance for trigger skills to refund half of energy spent")
+		if v then r.refund = r.refund + tonumber(v); r.lines[#r.lines + 1] = line end
+	end
+	local b = B()
+	pcall(function()
+		for _, node in pairs(b.spec.allocNodes or {}) do for _, line in ipairs(node.sd or {}) do scan(line) end end
+	end)
+	pcall(function()
+		for _, slot in pairs(b.itemsTab.slots or {}) do
+			local item = slot.selItemId and b.itemsTab.items[slot.selItemId]
+			if item and not slot.inactive then
+				for _, key in ipairs({ "implicitModLines", "explicitModLines", "runeModLines", "enchantModLines" }) do
+					for _, ml in ipairs(item[key] or {}) do scan(ml.line) end
+				end
+			end
+		end
+	end)
+	return r
+end
+
 local function metaGroupFacts(gi)
 	local g = B().skillsTab.socketGroupList[gi]
 	local mg, mge = groupMeta(g)
@@ -565,8 +627,10 @@ local function metaGroupFacts(gi)
 			elseif not isMetaGemEffect(ge) then
 				local isSpell = has(ge.skillTypes, "Spell")
 				local ct = ge.castTime or 0
-				if isSpell then maxE = maxE + ct * 100 end
-				spells[#spells + 1] = { slot = slot, gemId = gem.gemData.id, id = ge.id, name = gem.gemData.name, castTime = ct, spell = isSpell, level = gem.level }
+				-- wiki Cast on Critical: 100 x base cast time + 200 x total cast time modifiers (Comet: 100 + 200 = 300)
+				local addCt = (levelStat(ge, "total_cast_time_+_ms", gem.level) or 0) / 1000
+				if isSpell then maxE = maxE + ct * 100 + addCt * 200 end
+				spells[#spells + 1] = { slot = slot, gemId = gem.gemData.id, id = ge.id, name = gem.gemData.name, castTime = ct, addedCastTime = addCt, spell = isSpell, level = gem.level }
 			end
 		end
 	end
@@ -580,6 +644,7 @@ local function metaGroupFacts(gi)
 		group = gi, metaGemId = mg.gemData.id, metaSkillId = mge.id, metaName = mg.gemData.name, metaLevel = mg.level, metaQuality = mg.quality,
 		spells = spells, energySupports = supports,
 		maxEnergy = maxE, genBonus = gen, refund = refund,
+		socketedDamageMore = metaSocketedDamageMore(mg), globalEnergy = globalEnergyMods(),
 		perEvent = perEvent, perEventUnit = "energy per monster power per event",
 		energyStats = energyStatList(mge, mg.level),
 	}
@@ -622,6 +687,12 @@ local function perSkill(baseOverride, env0)
 					if o.Minion then f.minionOffence = offenceFacts(o.Minion) end
 					local s = sustainFacts(o)
 					f.manaUsePerSec, f.lifeUsePerSec = s.manaUsePerSec, s.lifeUsePerSec
+					if o.Minion then f.minionLife = num(o.Minion.Life) end
+					-- corpse explosions: the corpse PoB assumes (config, else monster life at the enemy level)
+					local msk = env.player.mainSkill
+					if msk and msk.skillData and msk.skillData.explodeCorpse then
+						f.corpseLife = num(msk.skillData.corpseLife) or (env.enemyLevel and data.monsterLifeTable and num(data.monsterLifeTable[env.enemyLevel])) or nil
+					end
 					f.types = typeNames(env.player.mainSkill and env.player.mainSkill.skillTypes)
 				else
 					f.err = tostring(env)
@@ -668,7 +739,11 @@ local function energyFacts(skills, mainSel)
 			} or null
 			e.triggered = array({})
 			for _, s in ipairs(skills) do
-				if s.group == gi and not s.err then
+				-- skills granted by a support (Fiery Death's explosion, ...) have their own trigger condition
+				-- (an enemy dying, ...); the meta gem never fires them, so they are not energy-triggered spells
+				local bySupport = false
+				for _, tn in ipairs(s.types or {}) do if tn == "SkillGrantedBySupport" then bySupport = true end end
+				if s.group == gi and not s.err and not bySupport then
 					e.triggered[#e.triggered + 1] = { index = s.index, name = s.name, id = s.id, dps = s.dps,
 						pobRate = s.offence.speed, skillTriggerRate = s.offence.skillTriggerRate,
 						effectiveSourceRate = s.offence.effectiveSourceRate, triggerRateCap = s.offence.triggerRateCap }
@@ -868,6 +943,7 @@ local function applyProfile(name)
 			-- a fresh PoB-default set, carrying the player's character-state inputs
 			local old = ct.configSets[S.playerConfigSetId]
 			local cs = (ct.CreateConfigSet or ct.NewConfigSet)(ct, nil, "search_" .. name)
+			for k, v in pairs(prof.default_config or {}) do cs.input[k] = v end
 			for k, v in pairs(old and old.input or {}) do
 				if type(k) == "string" then
 					for _, pre in ipairs(prof.carry_prefixes or {}) do
