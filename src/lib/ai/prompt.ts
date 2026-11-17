@@ -175,7 +175,8 @@ the build. Close with one line of totals from the summary.
 Use list_bases, list_affixes and craft_rare only for one specific item the
 user describes, or to change a base. craft_rare refuses a mod that does not
 exist. Do not write item text by hand for a rare. Use equip_from_item_db for
-uniques.
+uniques. The panel puts each weighted_trade_link search under your reply as an
+Open trade site button, so do not write the link out.
 
 For "which unique jewel", call suggest_unique_jewels once. It scores every
 unique jewel PoB knows in every allocated socket, searches the variants that
@@ -317,6 +318,28 @@ library topic evaluating-changes has the full rules.
 
 `;
 
+const lookups = (db: string, sites: string) => `## Looking things up
+
+The app's tools come first. When they cannot answer, such as a mechanic PoB
+does not model, a patch change, a drop source or a league mechanic, look it
+up in this order:
+
+1. search_poedb, then read_web_page on the best result. ${db} is built from
+   the game's own files, so its text and numbers win over the wiki.
+2. search_wiki, only when ${db} has no page for it, or for patch history,
+   drop sources and how a mechanic plays.
+
+Search results only point at pages. Read the page before you answer, and
+quote its numbers as written. read_web_page reads only ${sites}. The user
+approves every lookup, so read one page at a time, and pass find to reach the
+part you need. Link the page an answer came from. A number from a web page is not PoB's: say where it came
+from, and keep it out of a before/after table.
+
+`;
+
+const POE2_LOOKUPS = lookups("poe2db.tw", "poe2db.tw, poe2wiki.net, pathofexile2.com and pathofexile.com");
+const POE1_LOOKUPS = lookups("poedb.tw", "poedb.tw, poewiki.net and pathofexile.com");
+
 const CLOSING = `## Accuracy
 
 Every number must come from a tool call. Never estimate, and never carry a
@@ -435,7 +458,8 @@ the build. Close with one line of totals from the summary.
 Use list_bases, list_affixes and craft_rare only for one specific item the
 user describes, or to change a base. craft_rare refuses a mod that does not
 exist. Do not write item text by hand for a rare. Use equip_from_item_db for
-uniques.
+uniques. The panel puts each weighted_trade_link search under your reply as an
+Open trade site button, so do not write the link out.
 
 For "which unique jewel", call suggest_unique_jewels once. It scores every
 unique jewel PoB knows in every allocated socket, searches the variants that
@@ -579,8 +603,8 @@ The library topic evaluating-changes has the full rules.
  */
 export function style(game: Game): string {
   return game === "poe1"
-    ? ANSWER + POE1_GAME + POE1_BEFORE + CHANGING + POE1_SKILLS + POE1_GEAR + TREE + POE1_GEMS + POE1_GUARD + CLOSING
-    : ANSWER + POE2_GAME + POE2_BEFORE + CHANGING + POE2_SKILLS + POE2_GEAR + TREE + POE2_GEMS + POE2_GUARD + CLOSING;
+    ? ANSWER + POE1_GAME + POE1_BEFORE + CHANGING + POE1_SKILLS + POE1_GEAR + TREE + POE1_GEMS + POE1_GUARD + POE1_LOOKUPS + CLOSING
+    : ANSWER + POE2_GAME + POE2_BEFORE + CHANGING + POE2_SKILLS + POE2_GEAR + TREE + POE2_GEMS + POE2_GUARD + POE2_LOOKUPS + CLOSING;
 }
 
 /** For the panel's own loop, which starts with part of the registry. */

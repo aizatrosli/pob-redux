@@ -1157,6 +1157,9 @@
   "chat_always": "Always",
   "chat_skip": "Skip",
   "chat_allow_all": "allow all",
+  "chat_web_lookup": "This reads {site} on the web.",
+  "chat_allow": "Allow",
+  "chat_allow_site": "Always for this site",
   "chat_working": "working",
   "chat_continue": "Continue",
   "chat_copy_details": "Copy details",
@@ -1264,7 +1267,22 @@
   "tree_power_scoring": "scoring…",
   "tree_power_note_title": "Time to score every eligible node, and how many engines shared the work",
   "tree_power_counts": "{count} nodes · {seconds}s",
-  "tree_power_elapsed": "{ms} ms · {engines} engines",
+  "tree_power_elapsed": [
+    {
+      "declarations": [
+        "input ms",
+        "input engines",
+        "local enginesPlural = engines: plural"
+      ],
+      "selectors": [
+        "enginesPlural"
+      ],
+      "match": {
+        "enginesPlural=one": "{ms} ms · {engines} engine",
+        "enginesPlural=*": "{ms} ms · {engines} engines"
+      }
+    }
+  ],
   "tree_power_elapsed_one": "{ms} ms · 1 engine",
   "tree_url_placeholder": "https://www.pathofexile.com/passive-skill-tree/…",
   "tree_import": "Import",
@@ -1406,6 +1424,13 @@
   "items_stat_diff": "Stat differences",
   "items_stat_diff_title": "Show what removing or swapping an item changes, in its tooltip (Ctrl+D)",
   "items_equipment": "Equipment",
+  "wickerman_title": "Wickerman",
+  "wickerman_hint": "Viscera go in these slots. Their modifiers count toward the character.",
+  "wickerman_no_items": "No Viscera in this build. Equip one from the Viscera list, or paste one copied in game.",
+  "wickerman_slot_head": "Head",
+  "wickerman_slot_torso": "Torso",
+  "wickerman_slot_upper_limb": "Upper Limb",
+  "wickerman_slot_lower_limb": "Lower Limb",
   "squire_title": "Squire",
   "squire_character": "Character",
   "squire_level": "Level {level}",
@@ -1485,6 +1510,7 @@
   "items_catalyst_quality_title": "Catalyst quality %",
   "items_db_uniques": "Uniques",
   "items_db_rares": "Rare templates",
+  "items_db_viscera": "Viscera",
   "items_db_parsing": "Parsing item database (one-time)…",
   "items_db_equip_title": "Add to build and equip",
   "items_db_none": "No matches.",

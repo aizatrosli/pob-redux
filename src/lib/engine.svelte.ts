@@ -407,6 +407,29 @@ export interface TradeQueryOptions extends TradeTarget {
   blockedMods?: TradeModFilter[];
 }
 
+export interface WeightedTradeLinkOptions {
+  item_text: string;
+  slot: string;
+  league: string;
+  max_price: number;
+  currency: string;
+  realm?: "pc" | "xbox" | "sony" | "poe2";
+  stat_weights?: TradeWeight[];
+  status?: string;
+  max_level?: number;
+  sockets?: number;
+  links?: number;
+}
+
+export interface SavedBuildFile {
+  ok: boolean;
+  path: string;
+  unsaved: boolean;
+  generation: number;
+  rev: number;
+  snapshot: { xml: string; fileModified: number | null; unsaved: boolean };
+}
+
 export interface NinjaCharacter {
   name: string;
   className: string | null;
@@ -1110,6 +1133,8 @@ export interface GearOptResult {
   ms: number;
 }
 
+export type ItemDbName = "unique" | "rare" | "viscera";
+
 export interface SlotInfo {
   slot: string;
   label: string | null;
@@ -1118,6 +1143,7 @@ export interface SlotInfo {
   itemRarity: string | null;
   nodeId: number | null;
   weaponSet: number | null;
+  group?: "wickerman" | null;
   shown: boolean;
   inactive: boolean;
   /** Flask and charm slots only: PoB applies the item's effect only while this is true. */
@@ -1787,14 +1813,15 @@ export const engine = {
       buildPath: string;
     }>("version"),
   newBuild: (name?: string) => call<BuildInfo>("new_build", { name }),
-  loadBuildXml: (xml: string, name?: string, path?: string) => call<BuildInfo>("load_build_xml", { xml, name, path }),
+  loadBuildXml: (xml: string, name?: string, path?: string, snapshot?: { fileModified?: number | null; unsaved?: boolean }) =>
+    call<BuildInfo>("load_build_xml", { xml, name, path, ...snapshot }),
   loadBuildCode: (code: string, name?: string) => call<BuildInfo>("load_build_code", { code, name }),
   /** Which game a share code belongs to, without loading it. */
   codeGame: (code: string) => call<{ game: "poe1" | "poe2" | null }>("code_game", { code }),
   loadBuildFile: (path: string) => call<BuildInfo>("load_build_file", { path }),
-  saveBuildXml: () => call<{ xml: string }>("save_build_xml"),
+  saveBuildXml: () => call<{ xml: string; fileModified: number | null; unsaved: boolean }>("save_build_xml"),
   saveBuildCode: () => call<{ code: string }>("save_build_code"),
-  saveBuildFile: (path?: string) => call<{ ok: boolean; path: string; unsaved: boolean }>("save_build_file", path ? { path } : undefined),
+  saveBuildFile: (path?: string) => call<SavedBuildFile>("save_build_file", { path, snapshot: true }),
   /** Rename the open build; a saved build's file moves with it. */
   setBuildName: (name: string) => call<BuildInfo>("set_build_name", { name }),
   getBuild: () => call<BuildInfo>("get_build"),
@@ -1896,10 +1923,10 @@ export const engine = {
   equipItem: (slot: string, itemId: number) => call<SlotsResponse>("equip_item", { slot, itemId }),
   setSlotActive: (slot: string, active: boolean) => call<SlotsResponse>("set_slot_active", { slot, active }),
   deleteItem: (itemId: number) => call<{ items: ItemInfo[] }>("delete_item", { itemId }),
-  itemDbList: (opts: { db: "unique" | "rare"; query?: string; type?: string; limit?: number; offset?: number }) =>
+  itemDbList: (opts: { db: ItemDbName; query?: string; type?: string; limit?: number; offset?: number }) =>
     call<{ items: ItemDbRow[]; total: number; offset: number; types: { type: string; count: number }[] }>("item_db_list", opts),
   statDifferences: (show?: boolean) => call<{ show: boolean }>("stat_differences", show === undefined ? undefined : { show }),
-  itemTooltip: (opts: { itemId?: number; db?: "unique" | "rare"; name?: string; raw?: string; slotName?: string | false }) =>
+  itemTooltip: (opts: { itemId?: number; db?: ItemDbName; name?: string; raw?: string; slotName?: string | false }) =>
     call<Tooltip & { rarity: string | null }>("item_tooltip", opts),
   prepareItemPreview: (raw: string, generation: number, normalise: boolean) =>
     call<{ raw?: string }>("item_prepare_preview", { raw, generation, normalise }),
@@ -1910,7 +1937,7 @@ export const engine = {
   itemModifierOptions: (target: ItemTarget, source: string, query: string, implicit = false) =>
     call<{ options: { id: string; label: string; level: number | null }[]; total: number }>("item_modifier_options", { ...target, source, query, implicit }),
   /** `variants`: one entry per pick, a variant's name, a substring of it, or its index. */
-  itemDbEquip: (db: "unique" | "rare", name: string, slotName?: string, variants?: (string | number)[]) =>
+  itemDbEquip: (db: ItemDbName, name: string, slotName?: string, variants?: (string | number)[]) =>
     call<{ ok: boolean; itemId: number; slot: string; itemName: string; variants: string[]; mods: string[] }>("item_db_equip", { db, name, slotName, variants }),
   itemRaw: (itemId: number) => call<{ raw: string }>("item_raw", { itemId }),
   itemEdit: (text: string, itemId?: number, generation?: number) => call<{ ok: boolean; itemId: number; name: string }>("item_edit", { text, itemId, generation }),
@@ -1957,6 +1984,8 @@ export const engine = {
   removeSharedItem: (index: number) => call<{ items: SharedItem[] }>("remove_shared_item", { index }),
   equipSharedItem: (index: number, slotName?: string) => call<unknown>("equip_shared_item", { index, slotName }),
   tradeSearchStart: (p: TradeQueryOptions) => call<{ started: boolean }>("trade_search_start", p),
+  weightedTradeLink: (p: WeightedTradeLinkOptions) =>
+    call<{ tradeUrl: string; itemName: string; slot: string; realm: string; league: string; maxPrice: number; currency: string }>("weighted_trade_link", p),
   tradeSearchStep: (steps?: number) => call<{ done: boolean }>("trade_search_step", { steps }),
   tradeSearchResult: () => call<{ query: string }>("trade_search_result"),
   /** `query` runs a generated search; `url` prices a pasted trade link. */
