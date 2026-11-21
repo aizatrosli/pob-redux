@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "notes": "Evaluation profiles for search_set_profile. 'base' is 'player' (the build's own active config set) or 'fresh' (a new PoB-default config set). 'carry_prefixes' copies the player's config inputs whose names start with a prefix into a fresh set (quest rewards, bandit and pantheon are character state, not combat assumptions). 'config' sets PoB config vars (ConfigOptions.lua names) on top. 'scoring' is plain data for the caller's scorer; the engine never applies it.",
+  "notes": "Evaluation profiles for search_set_profile. 'base' is 'player' (the build's own active config set) or 'fresh' (a new PoB-default config set). 'carry_prefixes' copies the player's config inputs whose names start with a prefix into a fresh set (quest rewards, bandit and pantheon are character state, not combat assumptions). 'config' sets PoB config vars (ConfigOptions.lua names) on top. 'scoring' is plain data for the caller's scorer; the engine never applies it.  default_config: usual endgame quest picks for a fresh config set (the player's own picks, carried by carry_prefixes, win) and Rage at the build's maximum (PoB caps the config at MaximumRage and only applies it when the build can gain Rage). mapping_v1 sets Warcry Power 15: PoB only sets Power for bosses.",
   "profiles": {
     "as_exported": {
       "description": "The player's own config set, as exported. Includes any conditional toggles the player turned on.",
@@ -16,7 +16,11 @@
     "pinnacle_v1": {
       "description": "Single Pinnacle boss. Fresh PoB-default config (no conditional toggles), character state carried over.",
       "base": "fresh",
-      "carry_prefixes": ["quest", "bandit", "pantheon"],
+      "carry_prefixes": [
+        "quest",
+        "bandit",
+        "pantheon"
+      ],
       "config": {
         "enemyIsBoss": "Pinnacle"
       },
@@ -28,26 +32,57 @@
         "corpses_available": false,
         "enemy_cursed_unless_build_curses": false,
         "trusted": true
+      },
+      "default_config": {
+        "questAct 2Valley of the TitansMedallion": "30% increased Charm Charges Gained\n\t+1 Charm Slot",
+        "questAct 3Venom CryptsVenom Draught": "30% increased Elemental Ailment Threshold",
+        "questAct 4Eye of HinekoraTribal Medicine": "30% increased Global Armour, Evasion and Energy Shield",
+        "questAct 4Halls Of The DeadTawhoa's Test": "+5% to Lightning Resistance",
+        "questAct 4Halls Of The DeadTasalio's Test": "+5% to Cold Resistance",
+        "questAct 4Halls Of The DeadNgamahu's Test": "+5% to Fire Resistance",
+        "questAct 4Abandoned PrisonGoddess of Justice": "30% increased Life Recovery from Flasks",
+        "questInterlude 2QimahSeven Pillars": "+5% to all Elemental Resistances",
+        "multiplierRage": 999
       }
     },
     "mapping_v1": {
       "description": "Normal map pack: a rare monster with magic and normal monsters around it, no boss. Fresh PoB-default config, character state carried over.",
       "base": "fresh",
-      "carry_prefixes": ["quest", "bandit", "pantheon"],
+      "carry_prefixes": [
+        "quest",
+        "bandit",
+        "pantheon"
+      ],
       "config": {
         "enemyIsBoss": "None",
         "conditionEnemyRareOrUnique": true,
         "multiplierNearbyEnemies": 8,
-        "multiplierNearbyRareOrUniqueEnemies": 1
+        "multiplierNearbyRareOrUniqueEnemies": 1,
+        "multiplierWarcryPower": 15
       },
       "scoring": {
         "scenario": "mapping",
         "enemy_power": 5,
-        "enemy_power_pack": { "normal": 1, "magic": 2, "rare": 5 },
+        "enemy_power_pack": {
+          "normal": 1,
+          "magic": 2,
+          "rare": 5
+        },
         "enemy_count": 8,
         "enemy_rarity": "rare",
         "corpses_available": true,
         "trusted": true
+      },
+      "default_config": {
+        "questAct 2Valley of the TitansMedallion": "30% increased Charm Charges Gained\n\t+1 Charm Slot",
+        "questAct 3Venom CryptsVenom Draught": "30% increased Elemental Ailment Threshold",
+        "questAct 4Eye of HinekoraTribal Medicine": "30% increased Global Armour, Evasion and Energy Shield",
+        "questAct 4Halls Of The DeadTawhoa's Test": "+5% to Lightning Resistance",
+        "questAct 4Halls Of The DeadTasalio's Test": "+5% to Cold Resistance",
+        "questAct 4Halls Of The DeadNgamahu's Test": "+5% to Fire Resistance",
+        "questAct 4Abandoned PrisonGoddess of Justice": "30% increased Life Recovery from Flasks",
+        "questInterlude 2QimahSeven Pillars": "+5% to all Elemental Resistances",
+        "multiplierRage": 999
       }
     }
   }

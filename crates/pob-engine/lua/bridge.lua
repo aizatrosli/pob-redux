@@ -452,11 +452,16 @@ end
 -- report levelRequirement 0), only a `Tier`. This is the tier -> level ladder
 -- and the base support socket count that comes with it.
 gemUtil.GEM_TIER_LEVEL = { 1, 3, 6, 10, 14, 18, 22, 26, 31, 36, 41, 46, 52, 58, 64, 66, 72, 78, 84, 90 }
+gemUtil.SUPPORT_TIER_LEVEL = { 4, 16, 33, 45, 55 }
 
 function gemUtil.gemReqLevel(tier, gemData)
 	if not IS_POE2 then
 		local lv = gemData and gemData.grantedEffect and gemData.grantedEffect.levels and gemData.grantedEffect.levels[1]
 		return lv and lv.levelRequirement or nil
+	end
+	if tier and gemData and gemData.grantedEffect and gemData.grantedEffect.support then
+		-- support gems come from Uncut Support Gems, whose levels 1-5 drop from these character levels
+		return gemUtil.SUPPORT_TIER_LEVEL[tier] or gemUtil.SUPPORT_TIER_LEVEL[#gemUtil.SUPPORT_TIER_LEVEL]
 	end
 	return tier and gemUtil.GEM_TIER_LEVEL[tier] or nil
 end
