@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { scrollHint } from "$lib/scroll-hint";
   import { onMount } from "svelte";
-  import { chat, experimentDelta, MAX_WIDTH, MIN_WIDTH, type ToolTurn } from "$lib/state/chat.svelte";
+  import { chat, experimentDelta, lookupSite, MAX_WIDTH, MIN_WIDTH, type ToolTurn } from "$lib/state/chat.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import ModelPicker from "$lib/components/ModelPicker.svelte";
   import TraitsPicker from "$lib/components/TraitsPicker.svelte";
@@ -218,20 +219,23 @@
 
   // The model mangles long trade addresses when it copies them, so the button takes the tool's own.
   const tradeLinks = $derived.by(() => {
-    const out = new Map<number, string>();
-    let url: string | null = null;
+    const out = new Map<number, Map<string, string>>();
+    let links = new Map<string, string>();
     let lastBot = -1;
     const close = () => {
-      if (url && lastBot >= 0) out.set(lastBot, url);
-      url = null;
+      if (links.size && lastBot >= 0) out.set(lastBot, links);
+      links = new Map();
       lastBot = -1;
     };
     chat.turns.forEach((t, i) => {
       if (t.kind === "user") close();
       else if (t.kind === "assistant") lastBot = i;
-      else if (t.kind === "tool") {
-        const u = (t.result as { tradeUrl?: unknown } | undefined)?.tradeUrl;
-        if (typeof u === "string" && u.startsWith("https://www.pathofexile.com/trade")) url = u;
+      else if (t.kind === "tool" && t.status === "done") {
+        const result = t.result as { tradeUrl?: unknown; slot?: unknown } | undefined;
+        const url = result?.tradeUrl;
+        if (typeof url === "string" && url.startsWith("https://www.pathofexile.com/trade")) {
+          links.set(url, typeof result?.slot === "string" ? result.slot : "");
+        }
       }
     });
     if (!chat.busy) close();
@@ -349,7 +353,7 @@
     </div>
   {:else}
     <div class="logwrap">
-    <div class="log" bind:this={scroller} onscroll={onScroll}>
+    <div class="log scroll-hint" {@attach scrollHint} bind:this={scroller} onscroll={onScroll}>
       {#each chat.turns as turn, i}
         {#if turn.kind === "user"}
           <button
@@ -361,11 +365,11 @@
         {:else if turn.kind === "assistant"}
           <div class="botwrap">
             <div class="turn bot"><Markdown text={turn.text} /></div>
-            {#if tradeLinks.has(i)}
-              <button class="btn sm trade" onclick={() => tradeWindow.open(tradeLinks.get(i)!)} title={tradeLinks.get(i)}>
-                <Icon name="magnifying-glass" size={12} />{m.chat_open_trade()}
+            {#each tradeLinks.get(i) ?? [] as [url, slot] (url)}
+              <button class="btn sm trade" onclick={() => tradeWindow.open(url)} title={url}>
+                <Icon name="magnifying-glass" size={12} />{m.chat_open_trade()}{slot ? ` · ${slot}` : ""}
               </button>
-            {/if}
+            {/each}
             <button
               class="copy"
               class:done={copied === i}
@@ -379,7 +383,7 @@
         {:else}
           <div class="tool" class:err={turn.status === "error"} class:recovered={recovered.has(turn.id)}>
             <button class="tline" aria-expanded={!!expanded[turn.id]} onclick={() => (expanded[turn.id] = !expanded[turn.id])}>
-              <span class="ticon"><Icon name={turn.readOnly ? "eye" : "pencil"} size={11} /></span>
+              <span class="ticon"><Icon name={turn.lookup ? "globe" : turn.readOnly ? "eye" : "pencil"} size={11} /></span>
               <span class="tname">{turn.name}</span>
               <span class="targs">{summary(turn)}</span>
               <span class="tstat {turn.status}">{recovered.has(turn.id) ? m.chat_tool_recovered() : turn.status}</span>
@@ -399,7 +403,14 @@
                 {/if}
               </div>
             {/if}
-            {#if turn.status === "awaiting"}
+            {#if turn.status === "awaiting" && turn.lookup}
+              <div class="approve">
+                <span>{m.chat_web_lookup({ site: lookupSite(turn) })}</span>
+                <button class="btn sm" onclick={() => chat.resolveApproval(turn.id, true)}>{m.chat_allow()}</button>
+                <button class="btn sm ghost" onclick={() => chat.resolveApproval(turn.id, true, true)}>{m.chat_allow_site()}</button>
+                <button class="btn sm ghost" onclick={() => chat.resolveApproval(turn.id, false)}>{m.chat_skip()}</button>
+              </div>
+            {:else if turn.status === "awaiting"}
               <div class="approve">
                 <span>{m.chat_changes_build()}</span>
                 <button class="btn sm" onclick={() => chat.resolveApproval(turn.id, true)}>{m.chat_run()}</button>
@@ -457,7 +468,7 @@
 
     <div class="composer">
       {#if slashHits.length}
-        <div class="slash">
+        <div class="slash scroll-hint" {@attach scrollHint}>
           <div class="slabel">Built-in tools · {chat.toolNames.length} available</div>
           {#each slashHits as t, i}
             <button class="srow" class:sel={i === slashIndex} onclick={() => pickTool(t.name)}>
@@ -888,11 +899,15 @@
   }
   .approve {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
     margin-top: 5px;
     color: var(--warn);
     font-size: var(--fs-2xs);
+  }
+  .approve > span {
+    flex: 1 0 100%;
   }
   .always {
     display: flex;
@@ -1148,7 +1163,7 @@
     right: 0;
     max-height: 260px;
     overflow-y: auto;
-    background: var(--bg-2);
+    background-color: var(--bg-2);
     border: 1px solid var(--line-2);
     border-radius: var(--r-2);
     padding: 4px;

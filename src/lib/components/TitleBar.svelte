@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
-  import { build, type ViewId } from "$lib/state/build.svelte";
+  import { build, BUILDLESS_VIEWS, type ViewId } from "$lib/state/build.svelte";
   import { ui } from "$lib/state/ui.svelte";
   import { appOptions } from "$lib/state/options.svelte";
   import { game, GAMES, GAME_SHORT, GAME_LABEL, type Game } from "$lib/state/game.svelte";
@@ -51,6 +51,7 @@
     { id: "party", label: m.view_party(), key: "8", icon: "users-three" },
     { id: "optimise", label: m.view_optimise(), key: "9", icon: "chart-line-up" },
     { id: "compare", label: m.view_compare(), key: "", icon: "scales" },
+    { id: "graph", label: m.view_graph(), key: "", icon: "share-network" },
   ]);
 
   function tabTitle(t: { label: string; key: string }) {
@@ -70,7 +71,7 @@
     const un = win.onResized(async () => (maximized = await win.isMaximized()));
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey && !e.altKey && e.key === "Tab") {
-        const open = tabs.filter((t) => build.loaded || t.id === "import");
+        const open = tabs.filter((t) => build.loaded || BUILDLESS_VIEWS.includes(t.id));
         const at = Math.max(0, open.findIndex((t) => t.id === build.view));
         openView(open[(at + (e.shiftKey ? -1 : 1) + open.length) % open.length].id);
         e.preventDefault();
@@ -183,7 +184,7 @@
         class="tab"
         class:active={build.view === t.id && !appOptions.open}
         aria-selected={build.view === t.id && !appOptions.open}
-        disabled={!build.loaded && t.id !== "import"}
+        disabled={!build.loaded && !BUILDLESS_VIEWS.includes(t.id)}
         onclick={() => openView(t.id)}
         title={tabTitle(t)}
         aria-label={t.label}

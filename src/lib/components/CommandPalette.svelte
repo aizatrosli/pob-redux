@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { scrollHint } from "$lib/scroll-hint";
   import { tick } from "svelte";
   import { engine, listBuilds, type BuildEntry, type ConfigOption, type ItemInfo } from "$lib/engine.svelte";
-  import { build, type ViewId } from "$lib/state/build.svelte";
+  import { build, BUILDLESS_VIEWS, type ViewId } from "$lib/state/build.svelte";
   import { ui, type Jump } from "$lib/state/ui.svelte";
   import { chat } from "$lib/state/chat.svelte";
   import { appOptions } from "$lib/state/options.svelte";
@@ -128,10 +129,11 @@
       ["notes", m.view_notes(), "7"],
       ["party", m.view_party(), "8"],
       ["optimise", m.view_optimise(), "9"],
-      ["compare", m.view_compare(), "0"],
+      ["compare", m.view_compare(), ""],
+      ["graph", m.view_graph(), ""],
     ];
     return all
-      .filter(([id]) => build.loaded || id === "import")
+      .filter(([id]) => build.loaded || BUILDLESS_VIEWS.includes(id))
       .map(([id, label, key]) => ({ id: `view-${id}`, group: g, label, keys: key ? `Mod+${key}` : undefined, run: () => goTo(id) }));
   });
 
@@ -279,7 +281,7 @@
           oninput={() => (active = 0)}
         />
       </div>
-      <div class="plist" id="palette-list" role="listbox" aria-label={m.palette_title()}>
+      <div class="plist scroll-hint" {@attach scrollHint} id="palette-list" role="listbox" aria-label={m.palette_title()}>
         {#each groups as g (g.name)}
           <div class="ghead" role="presentation">{g.name}</div>
           {#each g.entries as e (e.id)}

@@ -22,6 +22,7 @@
 </script>
 
 <script lang="ts">
+  import { scrollHint } from "$lib/scroll-hint";
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";
 
@@ -32,7 +33,8 @@
     label,
     sections,
     disabled = false,
-  }: { title: string; detail: string; art?: string; label: string; sections: SwitcherSection[]; disabled?: boolean } = $props();
+    onactivate,
+  }: { title: string; detail: string; art?: string; label: string; sections: SwitcherSection[]; disabled?: boolean; onactivate?: () => void } = $props();
 
   const initials = (name: string) =>
     name
@@ -107,7 +109,7 @@
   aria-expanded={open}
   title={label}
   {disabled}
-  onclick={() => (open ? hide() : show())}
+  onclick={() => (onactivate ? onactivate() : open ? hide() : show())}
   onkeydown={(e) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     e.preventDefault();
@@ -124,7 +126,7 @@
 
 {#if open}
   <div
-    class="menu"
+    class="menu scroll-hint" {@attach scrollHint}
     role="menu"
     tabindex="-1"
     aria-label={label}
@@ -257,9 +259,8 @@
     overflow-y: auto;
     border: 1px solid var(--line-2);
     border-radius: var(--r-2);
-    background: var(--bg-1);
+    background-color: var(--bg-1);
     box-shadow: var(--shadow-tooltip);
-    scrollbar-width: thin;
   }
   .menu:focus {
     outline: none;

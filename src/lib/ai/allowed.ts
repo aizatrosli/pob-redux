@@ -9,6 +9,7 @@
 export const ALLOWED = new Set([
   // read
   "get_character",
+  "list_classes",
   "get_stats",
   "get_sidebar",
   "list_stat_keys",
@@ -44,6 +45,11 @@ export const ALLOWED = new Set([
   "search_timeless_seeds",
   "list_bases",
   "list_affixes",
+  "weighted_trade_link",
+  // Web lookups, limited to the game's own sites. The panel asks before each one.
+  "search_poedb",
+  "search_wiki",
+  "read_web_page",
   // write, approval-gated
   "alloc_node",
   "alloc_path",
@@ -51,6 +57,7 @@ export const ALLOWED = new Set([
   "dealloc_node",
   "tree_undo",
   "set_level",
+  "select_class",
   "set_config",
   "set_main_skill",
   "add_socket_group",
@@ -68,6 +75,10 @@ export const ALLOWED = new Set([
   "optimise_build",
   "meta_search_status",
   "meta_search_results",
+  // The Graph view's chains for the assistant: the list reads, the build
+  // checkpoints before it opens a result.
+  "graph_chains",
+  "chain_build",
   "set_gem_levels",
   "unequip_item",
   "set_flask_active",

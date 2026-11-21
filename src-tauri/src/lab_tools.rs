@@ -1,4 +1,4 @@
-//! MCP tools for the build optimiser and meta search, backed by the exilegen sidecar
+//! MCP tools for the build optimiser, meta search and mechanics graph, backed by the exilegen sidecar
 //! (`pob_engine::lab`). PoE2 only: exilegen's scoring data (condition registry, energy model,
 //! profiles) is PoE2's.
 
@@ -9,7 +9,7 @@ use tauri::Manager;
 use crate::game::Game;
 use crate::tools::{arg_bool, arg_i64, arg_list, arg_str, obj, prop, req_str, JsonObject, ToolContext, ToolDef, ToolError};
 
-pub(crate) const NAMES: &[&str] = &["optimise_build", "build_from_idea", "meta_search_start", "meta_search_status", "meta_search_results", "meta_search_stop"];
+pub(crate) const NAMES: &[&str] = &["optimise_build", "build_from_idea", "meta_search_start", "meta_search_status", "meta_search_results", "meta_search_stop", "graph_chains", "chain_build"];
 
 const CHECKPOINT: &str = "before optimise_build";
 
@@ -123,6 +123,48 @@ pub(crate) fn defs() -> Vec<ToolDef> {
             false,
             false,
         ),
+        def(
+            "graph_chains",
+            "Synergy chains from the mechanics graph, the Graph view's list: one part makes a state (a charge, an ailment, Rage) and another pays off on it. Best first, each with `id`, `kind`, `main` skill, `parts`, `links`, `thesis`, `score`, `fitted` (expected damage multiple, fitted to PoB runs), `doubts` (links that do not hold up when their text is read again: say so), `online_level`, `farm` (uniques to find) and `spirit_gems` (heralds and auras that fit, with cost and reason). Kind `reaction` is a meta gem (Cast on Critical, Cast on Elemental Ailment, ...) casting a second spell from something the main skill does; its `reaction` has the gem, the spell, what feeds it, an Energy estimate, reliability on a boss and whether it is `buildable`: the numbers are estimates, say so. `measured` is what PoB got for the built chain when `scores` names a run. `chain` returns one chain in full: evidence lines, leveling steps, Spirit gems passed over. Changes nothing; about a second. Build one with chain_build.",
+            obj(
+                json!({
+                    "class": prop("string", "e.g. Witch"),
+                    "ascendancy": prop("string", "e.g. Lich"),
+                    "main_skill": prop("string", "Only chains of this main skill (part of the name)"),
+                    "damage_types": with_desc(strings(), "Main skill deals one of: Fire, Cold, Lightning, Physical, Chaos"),
+                    "uniques": with_desc(strings(), "Chains must use one of these"),
+                    "keystones": with_desc(strings(), "Chains must use one of these"),
+                    "kinds": json!({ "type": "array", "items": { "type": "string", "enum": ["self_feed", "enabler", "graft", "bridge", "reaction"] } }),
+                    "online_by": prop("integer", "Only chains complete by this character level"),
+                    "level": prop("integer", "Pick Spirit gems for the Spirit held at this level"),
+                    "spirit_gear": prop("integer", "Spirit from equipment, with `level`"),
+                    "rank_by": json!({ "type": "string", "enum": ["formula", "fitted", "measured"], "description": "Default formula; measured needs `scores`" }),
+                    "scores": prop("string", "Chain scoring run directory"),
+                    "chain": prop("string", "One chain id, in full"),
+                    "top": prop("integer", "Default 10"),
+                }),
+                &[],
+            ),
+            true,
+            false,
+        ),
+        def(
+            "chain_build",
+            "Build one graph_chains chain from nothing with exilegen, scored as optimise_build. Returns `code`, honest DPS and EHP, the main skill's supports and the chain's `parts` with `included`. `level` builds what a character of that level has. `exclude_supports` keeps support gems out and reports what replaced each. `spirit_gems` adds heralds and auras: `auto` for the chain's own picks or a list of names; `spirit` then reports the Spirit reserved and the DPS with and without them. `apply` checkpoints and opens the result. Takes minutes.",
+            obj(
+                json!({
+                    "chain": prop("string", "Chain id from graph_chains"),
+                    "level": prop("integer", "Character level (default: end level)"),
+                    "exclude_supports": with_desc(strings(), "Support gem names"),
+                    "spirit_gems": with_desc(strings(), "[\"auto\"] or gem names"),
+                    "spirit_gear": prop("integer", "Spirit from equipment"),
+                    "apply": prop("boolean", "Open the result"),
+                }),
+                &["chain"],
+            ),
+            false,
+            true,
+        ),
     ]
 }
 
@@ -133,6 +175,44 @@ fn lab(ctx: &ToolContext) -> Result<LabConfig, ToolError> {
     let state = ctx.app.state::<crate::AppState>();
     let dir = ctx.app.path().app_data_dir().map_err(|e| ToolError::Failed(e.to_string()))?.join("lab");
     LabConfig::discover(&state.pob_root(), &dir, None).map_err(ToolError::Failed)
+}
+
+/// The Graph view's requirements for one graph_chains call (exilegen `graphx.Requirements`).
+fn graph_requirements(args: &JsonObject) -> Result<Value, ToolError> {
+    let mut req = Map::new();
+    for (arg, field) in [("class", "cls"), ("ascendancy", "ascendancy"), ("rank_by", "rank_by")] {
+        if let Some(v) = arg_str(args, arg).filter(|v| !v.trim().is_empty()) {
+            req.insert(field.into(), json!(v));
+        }
+    }
+    for (arg, field) in [("damage_types", "damage_types"), ("uniques", "uniques"), ("keystones", "keystones"), ("kinds", "chain_kinds")] {
+        let v = str_list(args, arg);
+        if !v.is_empty() {
+            req.insert(field.into(), json!(v));
+        }
+    }
+    if let Some(v) = u64_arg(args, "online_by")? {
+        req.insert("online_by".into(), json!(v));
+    }
+    if let Some(level) = u64_arg(args, "level")? {
+        req.insert("spirit_source".into(), json!("level"));
+        req.insert("spirit_level".into(), json!(level.clamp(1, 100)));
+        req.insert("spirit_gear".into(), json!(u64_arg(args, "spirit_gear")?.unwrap_or(0)));
+    }
+    Ok(Value::Object(req))
+}
+
+/// Arguments of `exilegen.lab graph`. `requirements` is the path of the requirements file.
+fn graph_args(args: &JsonObject, requirements: &str) -> Result<Vec<String>, ToolError> {
+    let mut out = vec!["graph".to_string(), "--requirements".into(), format!("@{requirements}")];
+    let scores = arg_str(args, "scores").or_else(|| std::env::var("POB_LAB_CHAIN_SCORES").ok());
+    for (flag, v) in [("--scores", scores), ("--main", arg_str(args, "main_skill")), ("--chain", arg_str(args, "chain"))] {
+        if let Some(v) = v.filter(|v| !v.trim().is_empty()) {
+            out.extend([flag.to_string(), v]);
+        }
+    }
+    out.extend(["--top".to_string(), u64_arg(args, "top")?.unwrap_or(10).clamp(1, 100).to_string()]);
+    Ok(out)
 }
 
 fn str_list(args: &JsonObject, key: &str) -> Vec<String> {
@@ -302,14 +382,65 @@ pub(crate) fn run(ctx: &ToolContext, name: &str, args: &JsonObject) -> Result<(V
             Ok((r, false))
         }
         "meta_search_stop" => Ok((lab.search_stop(&req_str(args, "run")?).map_err(ToolError::Failed)?, false)),
+        "graph_chains" => {
+            let dir = lab.state_dir.join("jobs");
+            std::fs::create_dir_all(&dir).map_err(|e| ToolError::Failed(e.to_string()))?;
+            let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+            let file = dir.join(format!("graph-{}-{nanos}.json", std::process::id()));
+            std::fs::write(&file, graph_requirements(args)?.to_string()).map_err(|e| ToolError::Failed(e.to_string()))?;
+            let r = graph_args(args, &file.to_string_lossy()).and_then(|a| lab.run(&a, Some(std::time::Duration::from_secs(120))).map_err(ToolError::Failed));
+            let _ = std::fs::remove_file(&file);
+            Ok((r?, false))
+        }
+        "chain_build" => {
+            let gems = str_list(args, "spirit_gems");
+            let gems: Vec<String> = if gems.iter().any(|g| g.eq_ignore_ascii_case("none")) { Vec::new() } else { gems };
+            let level = u64_arg(args, "level")?.map(|v| v as u32);
+            let a = crate::lab_chain::chain_args(&req_str(args, "chain")?, level, &str_list(args, "exclude_supports"), &gems, u64_arg(args, "spirit_gear")?.unwrap_or(0) as u32);
+            let mut out = lab.run(&a, Some(std::time::Duration::from_secs(1800))).map_err(ToolError::Failed)?;
+            let apply = arg_bool(args, "apply") == Some(true);
+            let code = out["code"].as_str().map(str::to_string);
+            let opened = match code {
+                Some(code) if apply => {
+                    out["checkpoint"] = open(ctx, &code)?;
+                    true
+                }
+                _ => false,
+            };
+            out["applied"] = json!(opened);
+            Ok((out, opened))
+        }
         other => Err(ToolError::Invalid(format!("unknown tool {other}"))),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_optimise, defs, unverified, NAMES};
+    use super::{compact_optimise, defs, graph_args, graph_requirements, unverified, NAMES};
     use serde_json::json;
+
+    #[test]
+    fn graph_call_maps_to_requirements_and_flags() {
+        let args = json!({
+            "class": "Witch", "ascendancy": "Lich", "kinds": ["bridge"], "uniques": ["Indigon"], "level": 45, "spirit_gear": 30,
+            "main_skill": "Ember Fusillade", "top": 500, "rank_by": "fitted",
+        });
+        let args = args.as_object().unwrap();
+        assert_eq!(
+            graph_requirements(args).unwrap(),
+            json!({
+                "cls": "Witch", "ascendancy": "Lich", "chain_kinds": ["bridge"], "uniques": ["Indigon"], "rank_by": "fitted",
+                "spirit_source": "level", "spirit_level": 45, "spirit_gear": 30,
+            })
+        );
+        let flags = graph_args(args, "req.json").unwrap();
+        assert_eq!(flags[..3], ["graph", "--requirements", "@req.json"]);
+        assert!(flags.windows(2).any(|w| w == ["--main", "Ember Fusillade"]));
+        assert_eq!(flags[flags.len() - 2..], ["--top", "100"]);
+        // nothing asked: no restrictions, the fixed Spirit budget
+        let none = json!({});
+        assert_eq!(graph_requirements(none.as_object().unwrap()).unwrap(), json!({}));
+    }
 
     #[test]
     fn names_match_defs() {

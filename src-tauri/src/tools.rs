@@ -40,10 +40,14 @@ gear, optimise_gear searches the real mod pool for every slot and scores each ca
 resistances capped; apply its proposals with `apply` or equip_item_raw. For unique jewels, suggest_unique_jewels \
 scores every one PoB knows in every allocated socket, variants included, and ranks them; equip a pick with \
 equip_from_item_db and its `variants`. For one specific item, list_bases \
-then list_affixes for the mod pool, then craft_rare, which builds it from PoB's own affix tables. For a \
+then list_affixes for the mod pool, then craft_rare, which builds it from PoB's own affix tables. For shopping, \
+pass the rare's raw text and slot to weighted_trade_link. Ask for the league and price cap with currency per slot if unclear. \
+If given a total budget for multiple items, ask for the per-slot caps. Give one search per item with its cap. For a \
 whole-build search, optimise_build reworks tree, supports and triggers under honest scoring (locked boss \
 config, conditional gems discounted, trigger energy), build_from_idea builds a class + skill + uniques idea \
-from nothing, and meta_search_start runs a background search for new archetypes; these take minutes. Before a \
+from nothing, and meta_search_start runs a background search for new archetypes; these take minutes. For \
+ideas, graph_chains lists the mechanics graph's synergy chains (what makes a state and what pays off on it, \
+with the Spirit gems that fit and any doubt about a link), and chain_build builds one. Before a \
 run of changes call checkpoint; every write returns `stats` and a `delta` \
 against the previous state, and rollback restores a checkpoint if the result is worse. Manage alternate \
 trees and gear sets with the list/select/create/copy/rename/delete _spec and _item_set tools. Use \
@@ -73,7 +77,9 @@ scores every one PoB knows in every allocated socket, variants included, and ran
 equip_from_item_db and its `variants`. For cluster jewels, suggest_cluster_jewels tries each size, enchant and \
 notable set in the empty cluster sockets and ranks them by gain per point; apply_cluster_jewel puts one in. \
 For one specific item, list_bases \
-then list_affixes for the mod pool, then craft_rare, which builds it from PoB's own affix tables. Before a \
+then list_affixes for the mod pool, then craft_rare, which builds it from PoB's own affix tables. For shopping, \
+pass the rare's raw text and slot to weighted_trade_link. Ask for the league and price cap with currency per slot if unclear. \
+If given a total budget for multiple items, ask for the per-slot caps. Give one search per item with its cap. Before a \
 run of changes call checkpoint; every write returns `stats` and a `delta` \
 against the previous state, and rollback restores a checkpoint if the result is worse. Manage alternate \
 trees and gear sets with the list/select/create/copy/rename/delete _spec and _item_set tools. Use \
@@ -111,6 +117,7 @@ pub struct ToolContext {
     pub(crate) calls: Arc<AtomicU64>,
 }
 
+#[derive(Debug)]
 pub(crate) enum ToolError {
     /// Bad arguments: reported as a JSON-RPC invalid-params error.
     Invalid(String),
@@ -264,6 +271,7 @@ pub(crate) fn defs(game: Game) -> Vec<ToolDef> {
     if game == Game::Poe1 {
         adapt_for_poe1(&mut all);
     }
+    all.extend(crate::web::defs(game));
     all
 }
 
@@ -333,7 +341,7 @@ fn defs_poe2_engine() -> Vec<ToolDef> {
         ro(
             "library",
             &format!(
-                "Game knowledge PoB does not carry, written for advising on builds. Pass `topic` to read one; omit it for the index. Topics: {}.",
+                "Game knowledge PoB does not carry, and the guide to this app. Pass `topic` to read one; omit it for the index. Topics: {}.",
                 crate::library::index(Game::Poe2)
             ),
             obj(json!({ "topic": prop("string", "Topic slug from the list, or a word from its description") }), &[]),
@@ -506,6 +514,28 @@ setting for the whole tree. It applies to nodes allocated from then on, so set i
             ),
         ).slow(),
         ro(
+            "weighted_trade_link",
+            "Return an official trade search for a rare from craft_rare or optimise_gear (use its raw text), with a price cap for this item. PoB estimates weighted mod values for the open build and uses the reference item's strength to set the minimum weighted sum. Works before equipping. Use one call per item and share the returned tradeUrl as-is when there is no in-app button.",
+            obj(json!({
+                "item_text": prop("string", "Raw item text from the proposal"),
+                "slot": prop("string", "Target slot from the proposal or get_items"),
+                "league": prop("string", "Exact trade league name"),
+                "max_price": { "type": "number", "exclusiveMinimum": 0, "description": "Maximum listing price for this item" },
+                "currency": prop("string", "Trade currency ID, e.g. divine, chaos, exalted, or equivalent (exalted equivalent)"),
+                "stat_weights": {
+                    "type": "array", "minItems": 1,
+                    "items": obj(json!({
+                        "stat": prop("string", "PoB Trader stat key, e.g. FullDPS, TotalEHP, Life"),
+                        "weightMult": { "type": "number", "exclusiveMinimum": 0 }
+                    }), &["stat", "weightMult"]),
+                    "description": "Override the build's Trader weights (default FullDPS=1, TotalEHP=0.5 if the build has none)"
+                },
+                "status": { "type": "string", "enum": ["securable", "available", "onlineleague", "online", "any"], "description": "Listing status (default online)" },
+                "max_level": { "type": "integer", "minimum": 1, "description": "Maximum required character level" },
+                "sockets": { "type": "integer", "minimum": 1, "description": "Minimum rune sockets, for supported slots" }
+            }), &["item_text", "slot", "league", "max_price", "currency"]),
+        ).slow(),
+        ro(
             "suggest_unique_jewels",
             "Score every unique jewel PoB knows against the open build and rank them. Each is evaluated in every allocated jewel socket through PoB's own calculation (a radius jewel per socket, others once), and a jewel with variants is searched over the ones that can apply: a skill-level jewel over the skills the build runs, a notable jewel over notables not yet allocated, a multi-pick jewel filled greedily (best pick first), a stackable jewel also as 2 or 3 copies. Each suggestion carries the `socket`, the chosen `variants`, its `mods`, a stat `delta` against the build now, a `score` (log-ratio gain in DPS, life plus energy shield, and effective HP weighted by `aim`, minus penalties for resistances or attributes it breaks; 0.1 is roughly a 10% gain), `alternatives` (the next best single variants) and `raw` (item text for equip_item_raw). `notScored` lists jewels PoB's numbers cannot judge (tree-planning and Timeless jewels) with why. Nothing is equipped. Takes 5 to 20 seconds. This is the tool for \"which unique jewel should I use\"; do not equip jewels one by one to find out.",
             obj(
@@ -615,7 +645,7 @@ setting for the whole tree. It applies to nodes allocated from then on, so set i
         ),
         rw(
             "set_gem",
-            "Change a gem's level, quality, enabled state, or swap it for another gem id. Omit a field to leave it unchanged.",
+            "Change a gem's level, quality, enabled state or corruption, or swap it for another gem id. Omit a field to leave it unchanged.",
             obj(
                 json!({
                     "group_index": group_index(),
@@ -623,7 +653,9 @@ setting for the whole tree. It applies to nodes allocated from then on, so set i
                     "level": prop("integer", "Gem level"),
                     "quality": prop("integer", "Gem quality"),
                     "enabled": prop("boolean", "Enable or disable the gem"),
-                    "gem_id": prop("string", "Replace with this gem id")
+                    "gem_id": prop("string", "Replace with this gem id"),
+                    "corrupted": prop("boolean", "PoE2 only, active skill gems whose get_skills entry has corruptible true: mark the gem corrupted. false also clears corrupt_level"),
+                    "corrupt_level": prop("integer", "PoE2 only: gem levels the corruption adds, -1, 0 or 1. A non-zero value marks the gem corrupted")
                 }),
                 &["group_index", "gem_index"],
             ),
@@ -812,9 +844,15 @@ fn adapt_for_poe1(defs: &mut Vec<ToolDef>) {
                 d.description.push_str(" For a cluster jewel, `cluster` gives the enchant skills and the passive count range.");
             }
             "optimise_gear" => d.description.push_str(" Flasks are left alone. Influence, sockets and Eldritch implicits also carry over from the item a proposal replaces, and `carried` lists the implicits too."),
+            "weighted_trade_link" => {
+                props["currency"]["description"] = json!("Trade currency ID, e.g. divine, chaos, exalted, or equivalent (chaos equivalent)");
+                props["realm"] = json!({ "type": "string", "enum": ["pc", "xbox", "sony"], "description": "Default: pc" });
+                props["sockets"]["description"] = json!("Exact socket count, for supported slots");
+                props["links"] = json!({ "type": "integer", "minimum": 1, "description": "Exact link count, for supported slots" });
+            }
             "library" => {
                 d.description = format!(
-                    "Game knowledge PoB does not carry, written for advising on builds. Pass `topic` to read one; omit it for the index. Topics: {}.",
+                    "Game knowledge PoB does not carry, and the guide to this app. Pass `topic` to read one; omit it for the index. Topics: {}.",
                     crate::library::index(Game::Poe1)
                 )
             }
@@ -912,6 +950,50 @@ fn req_i64(args: &JsonObject, key: &str) -> Result<i64, ToolError> {
     arg_i64(args, key)?.ok_or_else(|| ToolError::Invalid(format!("{key} is required")))
 }
 
+fn weighted_trade_params(args: &JsonObject) -> Result<Value, ToolError> {
+    let positive = |v: &Value| {
+        match v {
+            Value::Number(n) => n.as_f64(),
+            Value::String(s) => s.trim().parse::<f64>().ok(),
+            _ => None,
+        }
+        .filter(|n| n.is_finite() && *n > 0.0)
+    };
+    let mut params = Map::new();
+    for key in ["item_text", "slot", "league", "currency"] {
+        params.insert(key.into(), json!(req_str(args, key)?));
+    }
+    let price = args.get("max_price").and_then(positive)
+        .ok_or_else(|| ToolError::Invalid("max_price must be a positive number".into()))?;
+    params.insert("max_price".into(), json!(price));
+    for key in ["max_level", "sockets", "links"] {
+        if let Some(v) = args.get(key).filter(|v| !v.is_null()) {
+            let n = positive(v)
+                .filter(|n| n.fract() == 0.0 && *n <= f64::from(u32::MAX))
+                .ok_or_else(|| ToolError::Invalid(format!("{key} must be a positive integer")))?;
+            params.insert(key.into(), json!(n as u32));
+        }
+    }
+    for key in ["realm", "status"] {
+        if args.get(key).is_some_and(|v| !v.is_null()) {
+            params.insert(key.into(), json!(req_str(args, key)?));
+        }
+    }
+    if let Some(v) = args.get("stat_weights").filter(|v| !v.is_null()) {
+        let weights: Option<Vec<Value>> = v.as_array().filter(|w| !w.is_empty()).and_then(|weights| {
+            weights.iter().map(|w| {
+                let stat = w["stat"].as_str().map(str::trim).filter(|s| !s.is_empty())?;
+                Some(json!({ "stat": stat, "weightMult": positive(&w["weightMult"])? }))
+            }).collect()
+        });
+        let weights = weights.ok_or_else(|| {
+            ToolError::Invalid("stat_weights must contain stat keys with positive weightMult values".into())
+        })?;
+        params.insert("stat_weights".into(), Value::Array(weights));
+    }
+    Ok(Value::Object(params))
+}
+
 /// Remove PoB colour escapes (`^7`, `^xRRGGBB`) from a display string.
 fn strip_escapes(s: &str) -> String {
     let c: Vec<char> = s.chars().collect();
@@ -944,6 +1026,10 @@ pub(crate) async fn dispatch(
     name: String,
     mut args: JsonObject,
 ) -> Result<(Value, bool), ToolError> {
+    if let Some(out) = crate::web::run(ctx.game(), &name, &args).await {
+        ctx.calls.fetch_add(1, Ordering::Relaxed);
+        return out.map(|v| (v, false));
+    }
     if name == "load_build" {
         let url = args
             .get("source")
@@ -1392,6 +1478,7 @@ pub(crate) fn run_tool(ctx: &ToolContext, name: &str, args: &JsonObject) -> Resu
             let notables: Vec<Value> = arg_list(args, "notables").into_iter().filter(|v| v.as_str().is_some()).collect();
             stats(ctx.call("apply_cluster_jewel", json!({ "socket": req_i64(args, "socket")?, "raw": req_str(args, "item_text")?, "notables": notables }))?)
         }
+        "weighted_trade_link" => read(ctx.call("weighted_trade_link", weighted_trade_params(args)?)?),
         "optimise_gear" => {
             let slots: Vec<Value> = arg_list(args, "slots").into_iter().filter(|v| v.as_str().is_some()).collect();
             let mut result = ctx.call(
@@ -1553,6 +1640,8 @@ pub(crate) fn run_tool(ctx: &ToolContext, name: &str, args: &JsonObject) -> Resu
                 "quality": arg_i64(args, "quality")?,
                 "enabled": arg_bool(args, "enabled"),
                 "gemId": arg_str(args, "gem_id"),
+                "corrupted": arg_bool(args, "corrupted"),
+                "corruptLevel": arg_i64(args, "corrupt_level")?,
             }),
         )?),
         "remove_gem" => stats(ctx.call(
@@ -1596,13 +1685,30 @@ pub(crate) fn run_tool(ctx: &ToolContext, name: &str, args: &JsonObject) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{defs, instructions, POE1_TEXT};
+    use super::{defs, instructions, weighted_trade_params, POE1_TEXT};
     use crate::game::Game;
+    use serde_json::json;
+
+    #[test]
+    fn trade_params_accept_numeric_strings_and_whole_numbers() {
+        let mut input = json!({
+            "item_text": "Test item", "slot": "Boots", "league": "Standard",
+            "currency": "divine", "max_price": "2.5", "sockets": "2", "max_level": 80.0,
+            "stat_weights": [{ "stat": "Life", "weightMult": "0.5" }]
+        });
+        let params = weighted_trade_params(input.as_object().unwrap()).ok().expect("valid trade inputs");
+        assert_eq!(params["max_price"], json!(2.5));
+        assert_eq!(params["max_level"], json!(80));
+        assert_eq!(params["sockets"], json!(2));
+        assert_eq!(params["stat_weights"][0]["weightMult"], json!(0.5));
+        input["max_level"] = json!(80.5);
+        assert!(weighted_trade_params(input.as_object().unwrap()).is_err());
+    }
 
     #[test]
     fn poe1_registry_speaks_poe1() {
         let d = defs(Game::Poe1);
-        assert_eq!(d.len(), 80, "PoE1 tool count changed");
+        assert_eq!(d.len(), 84, "PoE1 tool count changed");
         for (name, _) in POE1_TEXT {
             assert!(d.iter().any(|t| t.name == *name), "POE1_TEXT names {name}, which is not a tool");
         }
@@ -1620,7 +1726,7 @@ mod tests {
     #[test]
     fn registry_is_stable_and_measured() {
         let d = defs(Game::Poe2);
-        assert_eq!(d.len(), 83, "tool count changed");
+        assert_eq!(d.len(), 89, "tool count changed");
 
         let mut names: Vec<&str> = d.iter().map(|t| t.name).collect();
         names.sort_unstable();
@@ -1642,7 +1748,7 @@ mod tests {
         // the prompt. This is a tripwire for runaway growth, not a budget.
         let bytes = serde_json::to_string(&d).unwrap().len();
         println!("tool registry: {} tools, {} bytes serialized (~{} tokens)", d.len(), bytes, bytes / 4);
-        assert!(bytes < 60_000, "registry grew to {bytes} bytes; check what was added");
+        assert!(bytes < 70_000, "registry grew to {bytes} bytes; check what was added");
     }
 
     #[test]

@@ -1,0 +1,164 @@
+import { levelConfig, sameLevelConfig, settle } from "./leveling";
+import { fileSpiritBudget, sameSpiritBudget, spiritBudget } from "./spirit";
+import { GRAPH_FORMAT, GRAPH_VERSION, type CheckStatus, type GraphChain, type GraphDoc, type GraphRequirements } from "./types";
+
+/** One line of the gate. `id` picks the label; `values` fill its detail message. */
+export interface GateCheck {
+  id:
+    | "file"
+    | "format"
+    | "game"
+    | "export"
+    | "age"
+    | "ladder"
+    | "scope_ascendancy"
+    | "scope_damage"
+    | "scope_constraints"
+    | "scope_uniques"
+    | "budget"
+    | "spirit"
+    | "leveling"
+    | "measured"
+    | "fitted"
+    | "matches";
+  status: CheckStatus;
+  values?: Record<string, string | number>;
+  /** exilegen's own check lines, shown under the export line. */
+  notes?: { status: CheckStatus; text: string }[];
+}
+
+const STALE_DAYS = 30;
+
+function names(doc: GraphDoc, kind: string): Set<string> {
+  return new Set((doc.mechanics?.nodes ?? []).filter((n) => n.kind === kind).map((n) => n.name));
+}
+
+export function chainMatches(c: GraphChain, req: GraphRequirements, doc: GraphDoc): boolean {
+  const ascs = new Set(c.asc_nodes.map(([a]) => a));
+  if (req.ascendancy && ascs.size && !ascs.has(req.ascendancy)) return false;
+  if (req.cls && !req.ascendancy && ascs.size) {
+    const cls = new Map((doc.catalog?.ascendancies ?? []).map((a) => [a.name, a.class]));
+    if (![...ascs].some((a) => cls.get(a) === req.cls)) return false;
+  }
+  if (req.damage_types.length && !c.main_damage_types.some((d) => req.damage_types.includes(d))) return false;
+  if (req.constraints.includes("no_cast:strict") && c.main_spell) return false;
+  if (req.constraints.includes("no_minions") && c.main_minion) return false;
+  if (req.chain_kinds.length && !req.chain_kinds.includes(c.kind)) return false;
+  if (c.novelty < req.min_novelty) return false;
+  if (c.uniques.some((u) => req.forbid_uniques.includes(u))) return false;
+  const wantU = req.uniques.map((u) => u.name);
+  if ((wantU.length || req.keystones.length) && !c.uniques.some((u) => wantU.includes(u)) && !c.keystones.some((k) => req.keystones.includes(k))) return false;
+  return true;
+}
+
+export function matchingChains(doc: GraphDoc | null, req: GraphRequirements): GraphChain[] {
+  if (!doc?.mechanics) return [];
+  // Leveling is settled here under the request's settings, whatever the file was exported with.
+  const cfg = levelConfig(req.leveling_config);
+  const inFile = !!doc.requirements.leveling;
+  const same = inFile === req.leveling && sameLevelConfig(doc.requirements.leveling_config, req.leveling_config);
+  const chains = same
+    ? doc.mechanics.chains
+    : doc.mechanics.chains.map((c) => {
+        if (!c.leveling) return c;
+        const path = settle(c.leveling, cfg);
+        const plain = inFile ? (c.leveling.factor > 0 ? c.score / c.leveling.factor : 0) : c.score;
+        return { ...c, leveling: path, score: req.leveling ? plain * path.factor : plain };
+      });
+  const kept = chains.filter((c) => chainMatches(c, req, doc) && levelingMatches(c, req));
+  if (req.rank_by === "measured") return [...kept].sort((a, b) => measuredOrder(a) - measuredOrder(b) || b.score - a.score).slice(0, req.top);
+  if (req.rank_by === "fitted" && kept.some((c) => c.predicted)) return [...kept].sort((a, b) => (b.predicted?.score ?? -1) - (a.predicted?.score ?? -1) || b.score - a.score).slice(0, req.top);
+  const fileByFormula = (doc.requirements.rank_by ?? "formula") === "formula";
+  return (same && fileByFormula ? kept : [...kept].sort((a, b) => b.score - a.score)).slice(0, req.top);
+}
+
+/** Chains with a measured gain first (highest first), then built ones, then unmeasured, then failed builds. */
+function measuredOrder(c: GraphChain): number {
+  const m = c.measured;
+  if (m?.gain_credited != null) return -m.gain_credited;
+  if (m?.built) return 1e6 - Math.min(m.dps, 9e5);
+  return m ? 3e6 : 2e6;
+}
+
+function levelingMatches(c: GraphChain, req: GraphRequirements): boolean {
+  if (!c.leveling) return true;
+  if (req.online_by > 0 && c.leveling.online_level > req.online_by) return false;
+  return !(req.leveling && c.leveling.unobtainable);
+}
+
+/**
+ * The gate in front of the analysis. The app can narrow a file but not widen
+ * it, so a file exported for a narrower request than this one fails.
+ */
+export function gate(doc: GraphDoc | null, req: GraphRequirements, game: string, now = Date.now()): GateCheck[] {
+  if (!doc) return [{ id: "file", status: "fail" }];
+  const out: GateCheck[] = [{ id: "file", status: "ok" }];
+  const formatOk = doc.format === GRAPH_FORMAT && doc.version === GRAPH_VERSION;
+  out.push({ id: "format", status: formatOk ? "ok" : "fail", values: { format: String(doc.format), version: String(doc.version) } });
+  if (!formatOk) return out;
+  out.push({ id: "game", status: doc.game === game ? "ok" : "fail", values: { file: doc.game, app: game } });
+  const notes = (doc.preflight ?? []).filter((c) => c.status !== "ok").map((c) => ({ status: c.status, text: `${c.label}: ${c.detail}` }));
+  const exported = doc.passed && !!doc.mechanics;
+  out.push({ id: "export", status: !exported ? "fail" : notes.length ? "warn" : "ok", notes });
+  if (!exported) return out;
+  const days = Math.floor((now - Date.parse(doc.generated_at)) / 86_400_000);
+  out.push({ id: "age", status: Number.isFinite(days) && days <= STALE_DAYS ? "ok" : "warn", values: { days: Number.isFinite(days) ? days : "?" } });
+  out.push({ id: "ladder", status: doc.ladder ? "ok" : "warn" });
+
+  const file = doc.requirements;
+  const ascOk = !file.ascendancy || file.ascendancy === req.ascendancy;
+  const clsOk = !file.cls || file.cls === req.cls || (!!req.ascendancy && doc.catalog?.ascendancies.find((a) => a.name === req.ascendancy)?.class === file.cls);
+  out.push({ id: "scope_ascendancy", status: ascOk && clsOk ? "ok" : "fail", values: { file: [file.cls, file.ascendancy].filter(Boolean).join(" / ") } });
+  const damageOk = !file.damage_types.length || (req.damage_types.length > 0 && req.damage_types.every((d) => file.damage_types.includes(d)));
+  out.push({ id: "scope_damage", status: damageOk ? "ok" : "fail", values: { file: file.damage_types.join(", ") } });
+  const constraintsOk = file.constraints.every((c) => req.constraints.includes(String(c)));
+  out.push({ id: "scope_constraints", status: constraintsOk ? "ok" : "fail", values: { file: file.constraints.join(", ") } });
+  const known = names(doc, "unique");
+  const keys = names(doc, "keystone");
+  const missing = [...req.uniques.map((u) => u.name).filter((u) => !known.has(u)), ...req.keystones.filter((k) => !keys.has(k))];
+  out.push({ id: "scope_uniques", status: missing.length ? "fail" : "ok", values: { missing: missing.join(", ") } });
+  // the weights in the file were worked out for the file's budget
+  const weighted = doc.mechanics?.chains.some((c) => c.tempo) ?? false;
+  const cfg = levelConfig(req.leveling_config);
+  const spiritWant = spiritBudget(req, cfg);
+  const spiritFile = fileSpiritBudget(doc, cfg);
+  const sameBudget = file.mana_per_second === req.mana_per_second && spiritFile.budget === spiritWant.budget;
+  out.push({ id: "budget", status: weighted && sameBudget ? "ok" : "warn", values: { weighted: weighted ? 1 : 0, mana: file.mana_per_second ?? "?", spirit: spiritFile.budget } });
+  // the Spirit gem sets in the file fit the file's limit; under another limit they are fitted again here
+  const suggested = doc.mechanics?.chains.filter((c) => c.spirit).length ?? 0;
+  const wantGems = req.spirit_gems !== false;
+  out.push({
+    id: "spirit",
+    status: !wantGems || (suggested && sameSpiritBudget(spiritWant, spiritFile)) ? "ok" : "warn",
+    values: { suggested, on: wantGems ? 1 : 0, budget: spiritWant.budget, file: spiritFile.budget },
+  });
+  const leveled = doc.mechanics?.chains.some((c) => c.leveling) ?? false;
+  const wanted = req.leveling || req.online_by > 0;
+  out.push({
+    id: "leveling",
+    status: !leveled ? (wanted ? "fail" : "warn") : !!file.leveling === req.leveling && sameLevelConfig(file.leveling_config, req.leveling_config) ? "ok" : "warn",
+    values: { leveled: leveled ? 1 : 0, on: req.leveling ? 1 : 0, by: req.online_by },
+  });
+  const scored = doc.mechanics?.chains.filter((c) => c.measured).length ?? 0;
+  const wantMeasured = req.rank_by === "measured";
+  out.push({
+    id: "measured",
+    status: wantMeasured ? (scored ? ((file.rank_by ?? "formula") === "measured" ? "ok" : "warn") : "fail") : "ok",
+    values: { scored, on: wantMeasured ? 1 : 0 },
+  });
+  const fitted = doc.mechanics?.chains.filter((c) => c.predicted).length ?? 0;
+  const wantFitted = req.rank_by === "fitted";
+  out.push({ id: "fitted", status: wantFitted && !fitted ? "fail" : "ok", values: { fitted, on: wantFitted ? 1 : 0 } });
+  const n = matchingChains(doc, req).length;
+  out.push({ id: "matches", status: n ? "ok" : "fail", values: { n } });
+  return out;
+}
+
+export function gateOpen(checks: GateCheck[]): boolean {
+  return checks.length > 1 && checks.every((c) => c.status !== "fail");
+}
+
+/** The command that produces a file for these requirements. */
+export function exportCommand(file = "requirements.json"): string {
+  return `python3 -m exilegen.builder.graphx --requirements ${file} --corpus-dir <corpus> --out graph.json`;
+}

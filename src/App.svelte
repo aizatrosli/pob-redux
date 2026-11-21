@@ -15,6 +15,7 @@
   import PartyView from "$lib/views/PartyView.svelte";
   import OptimiseView from "$lib/views/OptimiseView.svelte";
   import CompareView from "$lib/views/CompareView.svelte";
+  import GraphView from "$lib/views/GraphView.svelte";
   import ImportView from "$lib/views/ImportView.svelte";
   import SettingsView from "$lib/views/SettingsView.svelte";
   import ConfirmModal from "$lib/components/ConfirmModal.svelte";
@@ -32,6 +33,7 @@
   import { chat } from "$lib/state/chat.svelte";
   import { game, GAMES, GAME_LABEL } from "$lib/state/game.svelte";
   import { ui } from "$lib/state/ui.svelte";
+  import { itemWindow } from "$lib/state/item-window.svelte";
   import { appOptions } from "$lib/state/options.svelte";
   import { m } from "$lib/paraglide/messages";
 
@@ -71,6 +73,7 @@
     };
     window.addEventListener("keydown", onKey);
     const offTooltips = tooltip.install();
+    itemWindow.init();
     void app.boot();
     return () => {
       window.removeEventListener("keydown", onKey);
@@ -129,6 +132,8 @@
         <OptimiseView />
       {:else if build.view === "compare"}
         <CompareView />
+      {:else if build.view === "graph"}
+        <GraphView />
       {:else}
         <ImportView {paths} />
       {/if}
