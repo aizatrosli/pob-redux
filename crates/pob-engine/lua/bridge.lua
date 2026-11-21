@@ -532,6 +532,28 @@ function gemUtil.grantedGemNote(gemData)
 	return "granted by an item or effect, not a gem"
 end
 
+-- SkillsTab's slot.corruptLevel.shown; PoE1's SkillsTab has no corruption control.
+function gemUtil.corruptible(gem)
+	if not IS_POE2 then return false end
+	local active = gem.grantedEffect or gem.gemData and gem.gemData.grantedEffect
+	if gem.fromItem or gem.fromTree or active and (active.fromItem or active.fromTree) then return false end
+	local list = gem.gemData and gem.gemData.grantedEffectList or { gem.grantedEffect }
+	for n, ge in ipairs(list) do
+		if not ge.support and not ge.hideFromSideBar and (not ge.hasGlobalEffect or gem["enableGlobal" .. n]) then
+			return true
+		end
+	end
+	return false
+end
+
+-- PoB leaves the "{0}" in "Spectre: {0}" and "Companion: {0}" until the library has a minion to name.
+function gemUtil.skillDisplayName(activeSkill)
+	local ok, name = pcall(build.calcsTab.calcs.getActiveSkillDisplayName, activeSkill)
+	local ge = activeSkill.activeEffect and activeSkill.activeEffect.grantedEffect
+	name = (ok and name) or (ge and ge.name)
+	return name and name:gsub("%s*:?%s*{0}", ""):match("^%s*(.-)%s*$") or nil
+end
+
 -- Where an item-granted socket group comes from. Such a group cannot be
 -- removed or re-socketed; it leaves with the item.
 function gemUtil.grantedBy(group)
@@ -1261,8 +1283,7 @@ M.calc_skill = function(p)
 			if explodeName then
 				label = "From " .. (colorCodes[explodeSource.rarity or "NORMAL"] or "") .. explodeName
 			else
-				local ok, name = pcall(build.calcsTab.calcs.getActiveSkillDisplayName, skill)
-				label = (ok and name) or (ae and ae.grantedEffect and ae.grantedEffect.name) or ("Skill " .. i)
+				label = gemUtil.skillDisplayName(skill) or ("Skill " .. i)
 			end
 			skills[#skills + 1] = { index = i, label = label }
 		end
@@ -3213,7 +3234,7 @@ M.equip_item_raw = function(p)
 		error("no compatible slot found for this item; pass params.slot", 0)
 	end
 	build.itemsTab:AddItem(item, true)
-	build.itemsTab.slots[slotName]:SetSelItemId(item.id)
+	itemUtil.fillSlot(build.itemsTab.slots[slotName], item.id)
 	build.itemsTab:AddUndoState()
 	refresh()
 	return { ok = true, itemId = item.id, slot = slotName, itemName = item.name }
@@ -3228,7 +3249,7 @@ M.equip_item = function(p)
 	if id ~= 0 and not build.itemsTab:IsItemValidForSlot(build.itemsTab.items[id], slot.slotName) then
 		error(build.itemsTab.items[id].name .. " does not fit " .. slot.slotName, 0)
 	end
-	slot:SetSelItemId(id)
+	itemUtil.fillSlot(slot, id)
 	build.itemsTab:AddUndoState()
 	refresh()
 	return M.list_slots()
@@ -3507,8 +3528,7 @@ local function groupSkills(group)
 		local ae = activeSkill.activeEffect
 		local ge = ae and ae.grantedEffect
 		local entry = { index = i }
-		local ok, nm = pcall(build.calcsTab.calcs.getActiveSkillDisplayName, activeSkill)
-		entry.name = (ok and nm) or (ge and ge.name) or "?"
+		entry.name = gemUtil.skillDisplayName(activeSkill) or "?"
 		if i == (group.mainActiveSkill or 1) and ge and ae.srcInstance then
 			local src = ae.srcInstance
 			if ge.parts and #ge.parts > 1 then
@@ -3633,6 +3653,9 @@ M.get_skills = function()
 				count = opt(gem.count),
 				countable = gemCountable(group, gi, gem),
 				globalEffects = gemGlobalEffects(gem),
+				corrupted = gem.corrupted == true,
+				corruptLevel = tonumber(gem.corruptLevel) or 0,
+				corruptible = gemUtil.corruptible(gem),
 				errMsg = opt(gem.errMsg),
 				-- Set for skills the game grants (default weapon attacks, Raise
 				-- Shield, unique-granted skills): not a socket the player filled.
@@ -4365,6 +4388,18 @@ M.set_gem = function(p)
 	if p.enabled ~= nil then gem.enabled = p.enabled end
 	if p.enableGlobal1 ~= nil then gem.enableGlobal1 = p.enableGlobal1 == true end
 	if p.enableGlobal2 ~= nil then gem.enableGlobal2 = p.enableGlobal2 == true end
+	if p.corrupted ~= nil or p.corruptLevel ~= nil then
+		if not gemUtil.corruptible(gem) then
+			error(IS_POE2 and "only an active skill gem you socketed can be corrupted" or "gem corruption is a PoE2 option", 0)
+		end
+		local level = tonumber(p.corruptLevel)
+		if p.corruptLevel ~= nil and level ~= -1 and level ~= 0 and level ~= 1 then
+			error("corruptLevel must be -1, 0 or 1", 0)
+		end
+		local corrupted = p.corrupted == true or p.corrupted == nil and (level ~= 0 or gem.corrupted == true)
+		gem.corrupted = corrupted
+		gem.corruptLevel = corrupted and (level or tonumber(gem.corruptLevel) or 0) or 0
+	end
 	if p.count ~= nil then
 		local count = math.max(0, tonumber(p.count) or 1)
 		gem.count = IS_POE2 and count or math.floor(count)
@@ -4704,12 +4739,15 @@ M.item_db_list = function(p)
 	local db = itemUtil.dbFor(p.db)
 	local q = (p.query or ""):lower()
 	local wantType = p.type
+	local wantSlot = p.slot
+	if wantSlot and not build.itemsTab.slots[wantSlot] then error("unknown slot " .. tostring(wantSlot), 0) end
 	local rows = {}
 	local types = {}
 	for name, item in pairs(db.list) do
 		local itype = item.type or "?"
-		types[itype] = (types[itype] or 0) + 1
-		local match = (q == "" or name:lower():find(q, 1, true) ~= nil or (item.baseName or ""):lower():find(q, 1, true) ~= nil)
+		local fits = not wantSlot or (item.base and build.itemsTab:IsItemValidForSlot(item, wantSlot))
+		if fits then types[itype] = (types[itype] or 0) + 1 end
+		local match = fits and (q == "" or name:lower():find(q, 1, true) ~= nil or (item.baseName or ""):lower():find(q, 1, true) ~= nil)
 			and (not wantType or itype == wantType)
 		if match then
 			local implicits = array({})
@@ -4864,6 +4902,15 @@ M.item_db_equip = function(p)
 	return r
 end
 
+M.item_db_raw = function(p)
+	ensureBuild()
+	if not p or not p.name then error("params.db and params.name are required", 0) end
+	itemUtil.ensureItemDb()
+	local dbItem = itemUtil.dbFor(p.db).list[p.name]
+	if not dbItem then error("unknown database item " .. tostring(p.name), 0) end
+	return { raw = dbItem.raw or dbItem:BuildRaw() }
+end
+
 -- Canonical raw text for the edit dialog.
 M.item_raw = function(p)
 	ensureBuild()
@@ -4922,21 +4969,33 @@ end
 -- Crafting: bases, affixes, runes (ItemsTab:CraftItem / UpdateAffixControl)
 -- ---------------------------------------------------------------------------
 
-M.craft_bases = function()
-	local types = strArray(data.itemBaseTypeList)
+M.craft_bases = function(p)
+	local slot = p and p.slot
+	if slot then
+		ensureBuild()
+		if not build.itemsTab.slots[slot] then error("unknown slot " .. tostring(slot), 0) end
+	end
+	local types, noRare = array({}), array({})
 	local bases = {}
 	for _, t in ipairs(data.itemBaseTypeList) do
 		local list = array({})
 		for _, e in ipairs(data.itemBaseLists[t] or {}) do
-			list[#list + 1] = {
-				name = e.name,
-				label = opt(e.label),
-				subType = e.base and opt(e.base.subType) or null,
-			}
+			-- IsItemValidForSlot reads only these fields, so no full Item is built per base.
+			if not slot or build.itemsTab:IsItemValidForSlot({ type = e.base.type, base = e.base, baseName = e.name, rarity = "NORMAL" }, slot) then
+				list[#list + 1] = {
+					name = e.name,
+					label = opt(e.label),
+					subType = e.base and opt(e.base.subType) or null,
+				}
+			end
 		end
-		bases[t] = list
+		if #list > 0 then
+			types[#types + 1] = t
+			bases[t] = list
+			if itemUtil.magicAtMost(data.itemBaseLists[t][1].base) then noRare[#noRare + 1] = t end
+		end
 	end
-	return { types = types, bases = bases }
+	return { types = types, bases = bases, noRare = noRare }
 end
 
 -- `itemType` may be a typed list ("Boots: Armour") or its family ("Boots"),
@@ -4955,6 +5014,11 @@ function itemUtil.findBase(itemType, baseName)
 	end
 	if not known then error("unknown item type " .. tostring(itemType) .. "; see list_bases", 0) end
 	error("unknown base " .. tostring(baseName) .. " in type " .. tostring(itemType) .. "; see list_bases", 0)
+end
+
+-- CraftItem's makeItem turns a Rare pick into Magic for these bases.
+function itemUtil.magicAtMost(base)
+	return base.flask or base.type == "Charm" or base.type == "Tincture" or (base.type == "Jewel" and base.subType == "Charm") or false
 end
 
 -- Same construction as CraftItem's makeItem. The item is not added to the
@@ -4987,7 +5051,7 @@ function itemUtil.makeCraftedItem(base, rarity, title, range)
 		end
 		item.itemSocketCount = #item.sockets
 	end
-	if (base.base.flask or (base.base.type == "Jewel" and base.base.subType == "Charm") or base.base.type == "Charm") and rarity == "RARE" then
+	if itemUtil.magicAtMost(base.base) and rarity == "RARE" then
 		rarity = "MAGIC"
 	end
 	if base.base.type == "Transcendent Limb" then
@@ -5096,6 +5160,17 @@ function itemUtil.clusterSummary(item)
 	}
 end
 
+-- For user equips only: PoB leaves a filled flask or charm slot off, the app switches an empty one on.
+function itemUtil.fillSlot(slot, itemId)
+	local wasEmpty = (slot.selItemId or 0) == 0
+	slot:SetSelItemId(itemId)
+	if wasEmpty and itemId ~= 0 and slot.controls and slot.controls.activate then
+		slot.active = true
+		slot.controls.activate.state = true
+		build.itemsTab.activeItemSet[slot.slotName].active = true
+	end
+end
+
 function itemUtil.equipFirstValid(item, slotName)
 	slotName = itemUtil.resolveSlotName(slotName)
 	if slotName then
@@ -5104,12 +5179,12 @@ function itemUtil.equipFirstValid(item, slotName)
 		if not build.itemsTab:IsItemValidForSlot(item, slotName) then
 			error(item.baseName .. " does not fit slot " .. slotName, 0)
 		end
-		slot:SetSelItemId(item.id)
+		itemUtil.fillSlot(slot, item.id)
 		return slotName
 	end
 	for _, slot in ipairs(build.itemsTab.orderedSlots) do
 		if not slot.inactive and build.itemsTab:IsItemValidForSlot(item, slot.slotName) then
-			slot:SetSelItemId(item.id)
+			itemUtil.fillSlot(slot, item.id)
 			return slot.slotName
 		end
 	end
@@ -5123,7 +5198,7 @@ M.craft_item = function(p)
 	local item = itemUtil.makeCraftedItem(entry, p.rarity, p.title)
 	if item.clusterJewel then itemUtil.craftClusterJewel(item) end
 	build.itemsTab:AddItem(item, true)
-	if p.equip then itemUtil.equipFirstValid(item) end
+	if p.equip or p.slotName then itemUtil.equipFirstValid(item, p.slotName) end
 	build.itemsTab:PopulateSlots()
 	build.itemsTab:AddUndoState()
 	refresh()
@@ -7268,7 +7343,7 @@ function cmpUtil.socketKey(group)
 	return (group.slot or "") .. "|" .. table.concat(names, ",")
 end
 
--- poe.ninja hands over a whole PoB code rather than GGG's character data, so the re-import copies its parts across.
+-- A PoB code is a whole build rather than GGG's character data, so the re-import copies its parts across.
 M.merge_build = function(p)
 	ensureBuild()
 	p = p or {}
@@ -9543,7 +9618,7 @@ M.compare_copy_item = function(p)
 	if not build.itemsTab:IsItemValidForSlot(item, slotName) then
 		error(item.name .. " does not fit " .. slotName, 0)
 	end
-	build.itemsTab.slots[slotName]:SetSelItemId(item.id)
+	itemUtil.fillSlot(build.itemsTab.slots[slotName], item.id)
 	build.itemsTab:AddUndoState()
 	refresh()
 	return { ok = true, slot = slotName, itemName = item.name }
@@ -9580,6 +9655,13 @@ itemUtil.BUY_SIMILAR_TYPE_SLOT = {
 }
 
 function itemUtil.buySimilarTarget(p)
+	if type(p.raw) == "string" then
+		local slotName = tostring(p.slot or "")
+		if not build.itemsTab.slots[slotName] then error("unknown slot " .. slotName, 0) end
+		local item = new("Item"):Item(p.raw)
+		if not item.base then error("could not read that item", 0) end
+		return item, slotName
+	end
 	if p.side == "mine" or p.side == "theirs" then
 		local b = p.side == "mine" and build or cmpUtil.compareEntry()
 		local slotName = tostring(p.slot or "")
@@ -9627,7 +9709,7 @@ function itemUtil.buySimilarRows(item)
 end
 
 --- The rows PoB's Buy Similar popup offers for an item.
---- params: { itemId } for this build's item, or { slot, side = "mine"|"theirs" } on the Compare tab
+--- params: { itemId } for this build's item, { slot, side = "mine"|"theirs" } on the Compare tab, or { raw, slot } for an item not in the build
 M.buy_similar_info = function(p)
 	ensureBuild()
 	local item, slotName = itemUtil.buySimilarTarget(p or {})

@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { onDestroy, tick, untrack } from "svelte";
+  import { scrollHint } from "$lib/scroll-hint";
+  import { onDestroy, onMount, tick, untrack } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { readText } from "@tauri-apps/plugin-clipboard-manager";
   import {
     engine,
@@ -15,21 +17,25 @@
     type SquireSlot,
     type SquireState,
     type Tooltip,
-    type TooltipLine,
   } from "$lib/engine.svelte";
   import { build } from "$lib/state/build.svelte";
   import { ui } from "$lib/state/ui.svelte";
+  import { itemWindow } from "$lib/state/item-window.svelte";
+  import { createScrollHold } from "$lib/scroll-hold";
+  import { removeTemplate, saveTemplate, SHARED_ITEMS_CHANGED } from "$lib/shared-items";
   import { modKey } from "$lib/keys";
   import Kbd from "$lib/components/Kbd.svelte";
   import { game } from "$lib/state/game.svelte";
   import EquipmentGrid from "$lib/components/EquipmentGrid.svelte";
+  import ContextMenu from "$lib/components/ContextMenu.svelte";
   import { isWickermanSlot, WICKERMAN_AREAS } from "$lib/equipment";
-  import PobText from "$lib/components/PobText.svelte";
   import { stripPobText } from "$lib/pobtext";
   import { slotLabel } from "$lib/pob-labels";
   import ItemCustomizationControls from "$lib/components/ItemCustomizationControls.svelte";
+  import ItemDetailHead from "$lib/components/ItemDetailHead.svelte";
+  import ItemDetailPane from "$lib/components/ItemDetailPane.svelte";
+  import ItemTooltipBox from "$lib/components/ItemTooltipBox.svelte";
   import SearchSelect from "$lib/components/SearchSelect.svelte";
-  import ItemFrame from "$lib/components/ItemFrame.svelte";
   import PobTooltip from "$lib/components/PobTooltip.svelte";
   import TraderWindow from "$lib/components/TraderWindow.svelte";
   import BuySimilarDialog from "$lib/components/BuySimilarDialog.svelte";
@@ -59,6 +65,8 @@
   let buySimilarFor = $state<number | null>(null);
 
   let dbTab = $state<ItemDbName>("unique");
+  let sharedTab = $state(false);
+  let dbSlot = $state<string | null>(null);
   let dbQuery = $state("");
   let dbType = $state("");
   let dbRows = $state<ItemDbRow[]>([]);
@@ -82,21 +90,16 @@
   let previewLoading = $state(false);
   let previewCommitting = $state(false);
   let affixPending = $state(false);
-  let detailLoading = $state(false);
+  let detailTransition = $state(false);
   let previewSlot = $state("");
   let detailPane = $state<HTMLDivElement | undefined>();
-  type ScrollHold = {
-    pane: HTMLDivElement;
-    content: HTMLDivElement;
-    top: number;
-  };
-  let scrollHold: ScrollHold | null = null;
+  const scrollHold = createScrollHold();
   let pendingPaste = $state<{ text: string; stamp: number } | null>(null);
   let previewStamp = 0;
   let alive = true;
   const generation = untrack(() => build.info!.generation);
   const previewStale = $derived(preview?.rev !== build.rev);
-  const itemTransitionBusy = $derived(affixPending || previewLoading || previewCommitting || detailLoading);
+  const itemTransitionBusy = $derived(affixPending || previewLoading || previewCommitting || detailTransition);
   const itemBusy = $derived(itemTransitionBusy || build.busy > 0);
 
   onDestroy(() => {
@@ -113,56 +116,21 @@
     previewLoading = false;
   }
 
-  function captureDetailScroll(pane = detailPane) {
-    if (!pane) return null;
-    if (scrollHold?.pane !== pane) {
-      scrollHold = { pane, content: pane.querySelector<HTMLDivElement>(".detailcontent")!, top: 0 };
-    }
-    scrollHold.top = pane.scrollTop;
-    scrollHold.content.style.minHeight = `calc(100% + ${Math.ceil(scrollHold.top)}px)`;
-    return scrollHold;
-  }
-
   function setAffixPending(pending: boolean) {
-    if (pending) captureDetailScroll();
+    if (pending) scrollHold.capture(detailPane);
     affixPending = pending;
-  }
-
-  function followDetailScroll(event: Event) {
-    const hold = scrollHold;
-    if (!hold || hold.pane !== event.currentTarget) return;
-    hold.top = hold.pane.scrollTop;
-    hold.content.style.minHeight = `calc(100% + ${Math.ceil(hold.top)}px)`;
-  }
-
-  function holdDetailScroll(pane: HTMLDivElement | undefined) {
-    const hold = captureDetailScroll(pane);
-    if (!hold) return () => {};
-    return () => {
-      void tick().then(() => {
-        if (!alive || !pane?.isConnected || pane !== detailPane || scrollHold !== hold) return;
-        pane.scrollTop = hold.top;
-      });
-    };
-  }
-
-  function releaseDetailScroll(pane = scrollHold?.pane) {
-    const hold = scrollHold;
-    if (!hold || hold.pane !== pane) return;
-    hold.content.style.minHeight = "";
-    scrollHold = null;
   }
 
   $effect(() => {
     const pane = detailPane;
-    return () => releaseDetailScroll(pane);
+    return () => scrollHold.release(pane);
   });
 
   // The floor only has to outlast the edit; left in place, it keeps blank space below content that shrank.
   $effect(() => {
     if (itemBusy) return;
     void tick().then(() => {
-      if (!itemBusy) releaseDetailScroll();
+      if (!itemBusy) scrollHold.release();
     });
   });
 
@@ -196,10 +164,11 @@
         break;
       }
       const pane = updated && preview ? detailPane : undefined;
-      const restoreScroll = holdDetailScroll(pane);
+      const restoreScroll = scrollHold.keep(pane, () => alive && pane === detailPane);
       preview = { ...result, text, customization };
       restoreScroll();
-      if (!result.slots.some((s) => s.slot === previewSlot)) previewSlot = result.slots[0]?.slot ?? "";
+      if (dbSlot && result.slots.some((s) => s.slot === dbSlot)) previewSlot = dbSlot;
+      else if (!result.slots.some((s) => s.slot === previewSlot)) previewSlot = result.slots[0]?.slot ?? "";
       hideTip();
       return true;
     } catch (e) {
@@ -212,7 +181,7 @@
 
   async function customizePreview(edit: ItemCustomizationEdit) {
     if (!preview || previewLoading || previewCommitting) return false;
-    captureDetailScroll();
+    scrollHold.capture(detailPane);
     const stamp = ++previewStamp;
     previewLoading = true;
     previewError = null;
@@ -285,10 +254,47 @@
     }, { sync: false });
     if (result && alive) {
       discardPreview();
-      selectedItem = result.itemId;
+      selectedItem = null;
     }
     if (result) await build.run(() => build.sync(), { sync: false, user: false });
+    if (result) followInWindow(result.itemId);
     previewCommitting = false;
+  }
+
+  // Only the pop-out follows: inline, the detail would replace the database list being browsed.
+  function followInWindow(itemId: number) {
+    if (itemWindow.open) void itemWindow.show(itemId);
+  }
+
+  async function previewText(load: () => Promise<string>) {
+    if (previewCommitting) return;
+    const stamp = ++previewStamp;
+    previewLoading = true;
+    previewError = null;
+    try {
+      const raw = await load();
+      if (alive && stamp === previewStamp) await requestPreview(raw, stamp, true);
+    } catch (e) {
+      if (alive && stamp === previewStamp) {
+        previewError = String(e);
+        previewLoading = false;
+      }
+    }
+  }
+
+  // A double-click, or Enter on the focused name, opens the preview; a single click leaves the list in place.
+  function previewOnOpen(e: MouseEvent, load: () => Promise<string>) {
+    if (e.detail === 0 || e.detail === 2) void previewText(load);
+  }
+
+  async function equipFromDb(name: string) {
+    const r = await build.run(() => engine.itemDbEquip(dbShown, name, dbSlot ?? undefined));
+    if (r) followInWindow(r.itemId);
+  }
+
+  async function equipShared(index: number) {
+    const r = await build.run(() => engine.equipSharedItem(index, dbSlot ?? undefined));
+    if (r) followInWindow(r.itemId);
   }
 
   $effect(() => {
@@ -299,97 +305,72 @@
     });
   });
 
+  type CraftData = { types: string[]; bases: Record<string, CraftBase[]>; noRare: string[] };
   let craftOpen = $state(false);
-  let craftData = $state<{ types: string[]; bases: Record<string, CraftBase[]> } | null>(null);
+  let craftAll: CraftData | null = null;
+  let craftData = $state<CraftData | null>(null);
+  let craftSlot = $state<string | null>(null);
   let craftType = $state("");
   let craftBase = $state("");
   let craftRarity = $state("RARE");
   let craftTitle = $state("New Item");
   let craftEquip = $state(true);
-
-  let detail = $state<{ itemId: number; tt: Tooltip; customization: ItemCustomization } | null>(null);
-  let pendingDetail: { itemId: number; customization: ItemCustomization } | null = null;
+  const craftNoRare = $derived(!!craftData?.noRare.includes(craftType));
   $effect(() => {
-    const id = selectedItem;
-    build.rev;
-    let active = true;
-    untrack(() => {
-      if (id == null) {
-        detail = null;
-        detailLoading = false;
-        pendingDetail = null;
-        return;
-      }
-      detailLoading = true;
-      const customization = pendingDetail?.itemId === id ? pendingDetail.customization : null;
-      pendingDetail = null;
-      Promise.all([engine.itemTooltip({ itemId: id }), customization ?? engine.itemCustomization({ itemId: id, generation })])
-        .then(([tt, customization]) => {
-          if (active) {
-            const pane = detail?.itemId === id ? detailPane : undefined;
-            const restoreScroll = holdDetailScroll(pane);
-            detail = { itemId: id, tt, customization };
-            restoreScroll();
-          }
-        })
-        .catch(() => {
-          if (active) {
-            detail = null;
-            selectedItem = null;
-          }
-        })
-        .finally(() => { if (active) detailLoading = false; });
-    });
-    return () => { active = false; };
+    if (craftNoRare && craftRarity === "RARE") craftRarity = "MAGIC";
   });
-
-  async function customizeSavedItem(edit: ItemCustomizationEdit) {
-    const itemId = selectedItem;
-    if (itemId == null) return;
-    captureDetailScroll();
-    const result = await build.run(async () => {
-      const customization = await engine.customizeItem({ itemId, generation }, edit);
-      pendingDetail = { itemId, customization };
-      return customization;
-    });
-    if (!result) {
-      if (pendingDetail?.itemId === itemId) pendingDetail = null;
-    }
-    return result;
-  }
 
   // shared items (main.sharedItemList; app-added ones persisted locally)
-  const SHARED_KEY = "pob-redux:shared-items";
   let shared = $state<SharedItem[]>([]);
+  let sharedRefresh = $state(0);
+  const sharedRows = $derived.by(() => {
+    const q = dbQuery.trim().toLowerCase();
+    return q ? shared.filter((it) => `${it.name} ${it.baseName ?? ""}`.toLowerCase().includes(q)) : shared;
+  });
   $effect(() => {
     build.rev;
+    sharedRefresh;
     engine.getSharedItems().then((r) => (shared = r.items)).catch(() => (shared = []));
   });
-  function persistShared(raw: string, add: boolean) {
-    try {
-      let raws: string[] = JSON.parse(localStorage.getItem(SHARED_KEY) ?? "[]");
-      if (add) raws.push(raw);
-      else {
-        const i = raws.indexOf(raw);
-        if (i >= 0) raws.splice(i, 1);
-      }
-      localStorage.setItem(SHARED_KEY, JSON.stringify(raws));
-    } catch {}
-  }
+  onMount(() => {
+    const off = listen(SHARED_ITEMS_CHANGED, () => sharedRefresh++);
+    return () => void off.then((unlisten) => unlisten());
+  });
   async function addShared(itemId: number) {
-    const r = await engine.addSharedItem({ itemId }).catch(() => null);
-    if (r) {
-      shared = r.items;
-      persistShared(r.items[r.items.length - 1].raw, true);
+    const items = await saveTemplate(itemId);
+    if (items) {
+      shared = items;
+      templateSaved = itemId;
     }
   }
+  let templateSaved = $state<number | null>(null);
+  $effect(() => {
+    selectedItem;
+    build.rev;
+    templateSaved = null;
+  });
   async function removeShared(it: SharedItem) {
-    const r = await engine.removeSharedItem(it.index).catch(() => null);
-    if (r) {
-      shared = r.items;
-      persistShared(it.raw, false);
-    }
+    const items = await removeTemplate(it);
+    if (items) shared = items;
   }
+
+  function popOut() {
+    if (selectedItem == null) return;
+    const id = selectedItem;
+    selectItem(null);
+    void itemWindow.show(id);
+  }
+
+  $effect(() => {
+    const id = itemWindow.docked;
+    if (id == null) return;
+    untrack(() => {
+      itemWindow.docked = null;
+      if (preview) discardPreview();
+      hideTip();
+      selectedItem = id;
+    });
+  });
 
   // The Trader window: a weighted trade search per slot, opened in the browser.
   let traderOpen = $state(false);
@@ -399,30 +380,28 @@
     traderOpen = true;
   }
 
-  async function openCraft() {
+  async function openCraft(slot: string | null = null, equip = slot != null || craftEquip) {
+    craftSlot = slot;
+    craftEquip = equip;
     craftOpen = true;
-    if (!craftData) {
-      craftData = await engine.craftBases().catch(() => null);
-      if (craftData) {
-        craftType = craftData.types[0] ?? "";
-        craftBase = craftData.bases[craftType]?.[0]?.name ?? "";
-      }
+    const loaded = slot ? await engine.craftBases(slot).catch(() => null) : (craftAll ??= await engine.craftBases().catch(() => null));
+    if (craftSlot !== slot) return;
+    craftData = loaded;
+    if (craftData && !craftData.bases[craftType]?.some((b) => b.name === craftBase)) {
+      if (!craftData.types.includes(craftType)) craftType = craftData.types[0] ?? "";
+      craftBase = craftData.bases[craftType]?.[0]?.name ?? "";
     }
   }
   async function doCraft() {
     if (itemBusy) return;
-    const r = await build.run(() => engine.craftItem({ type: craftType, baseName: craftBase, rarity: craftRarity, title: craftTitle, equip: craftEquip }));
+    const slotName = craftEquip && craftSlot ? craftSlot : undefined;
+    const r = await build.run(() => engine.craftItem({ type: craftType, baseName: craftBase, rarity: craftRarity, title: craftTitle, equip: craftEquip, slotName }));
     if (r) {
       craftOpen = false;
       selectedItem = r.itemId;
     }
   }
 
-  function lineStyle(l: TooltipLine): string {
-    if (l.size >= 20) return "font-size:13px;font-weight:600";
-    if (l.size >= 16) return "font-size:12px";
-    return "font-size:11px";
-  }
 
   let tip = $state<{ tt: Tooltip; x: number; y: number } | null>(null);
   let tipTimer = 0;
@@ -468,31 +447,97 @@
     return () => { live = false; };
   });
 
+  const dbSlotInfo = $derived(dbSlot ? characterSlots.find((s) => s.slot === dbSlot) : undefined);
   $effect(() => {
-    const q = dbQuery;
-    const t = dbType;
-    const tab = dbShown;
-    untrack(() => {
-      if (dbBusy) return;
-      dbBusy = true;
-      const stamp = ++dbStamp;
-      dbLoading = !dbLoaded;
-      engine
-        .itemDbList({ db: tab, query: q, type: t || undefined, limit: 80 })
-        .then((r) => {
-          if (stamp === dbStamp) {
-            dbRows = r.items;
-            dbTypes = r.types;
-            dbTotal = r.total;
-            dbLoaded = true;
-          }
-        })
-        .catch(() => {})
-        .finally(() => {
-          dbBusy = false;
-          dbLoading = false;
-        });
-    });
+    if (dbSlot && (!dbSlotInfo || items.some((it) => it.id === dbSlotInfo.itemId))) dbSlot = null;
+  });
+
+  function findForSlot(slot: string, tab?: ItemDbName) {
+    hideTip();
+    if (preview && !tab) {
+      if (preview.slots.some((s) => s.slot === slot)) previewSlot = slot;
+      return;
+    }
+    if (!tab && dbSlot === slot && selectedItem == null) {
+      dbSlot = null;
+      return;
+    }
+    if (preview) discardPreview();
+    selectedItem = null;
+    sharedTab = false;
+    if (tab) dbTab = tab;
+    dbType = "";
+    dbSlot = slot;
+  }
+
+  let slotMenu = $state<{ x: number; y: number; slot: string; unique?: number; rare?: number } | null>(null);
+  function openSlotMenu(e: MouseEvent, slot: string) {
+    hideTip();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const fromKeyboard = e.clientX === 0 && e.clientY === 0;
+    const menu = { x: fromKeyboard ? r.left + 8 : e.clientX, y: fromKeyboard ? r.bottom : e.clientY, slot };
+    slotMenu = menu;
+    Promise.all([engine.itemDbList({ db: "unique", slot, limit: 0 }), engine.itemDbList({ db: "rare", slot, limit: 0 })])
+      .then(([unique, rare]) => {
+        if (slotMenu?.slot === slot) slotMenu = { ...slotMenu, unique: unique.total, rare: rare.total };
+      })
+      .catch(() => {});
+  }
+  const slotMenuItems = $derived.by<MenuItem[]>(() => {
+    const menu = slotMenu;
+    if (!menu) return [];
+    const none = m.items_slot_none_fit();
+    const equipped = characterSlots.find((s) => s.slot === menu.slot && s.itemId !== 0 && items.some((it) => it.id === s.itemId));
+    const list: MenuItem[] = [
+      { label: m.items_add_unique(), disabled: menu.unique === 0, title: menu.unique === 0 ? none : undefined, onclick: () => findForSlot(menu.slot, "unique") },
+      { label: m.items_add_rare(), disabled: menu.rare === 0, title: menu.rare === 0 ? none : undefined, onclick: () => findForSlot(menu.slot, "rare") },
+      { label: m.items_craft(), separator: true, onclick: () => void openCraft(menu.slot) },
+    ];
+    if (equipped) {
+      list.push({
+        label: m.items_slot_remove(),
+        title: m.items_slot_remove_title(),
+        danger: true,
+        separator: true,
+        onclick: () => build.run(() => engine.equipItem(menu.slot, 0)),
+      });
+    }
+    return list;
+  });
+
+  let dbPending = false;
+  function loadDb() {
+    if (dbBusy) {
+      dbPending = true;
+      return;
+    }
+    dbBusy = true;
+    dbPending = false;
+    const stamp = ++dbStamp;
+    dbLoading = !dbLoaded;
+    engine
+      .itemDbList({ db: dbShown, query: dbQuery, type: dbType || undefined, slot: dbSlot ?? undefined, limit: 80 })
+      .then((r) => {
+        if (stamp === dbStamp) {
+          dbRows = r.items;
+          dbTypes = r.types;
+          dbTotal = r.total;
+          dbLoaded = true;
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        dbBusy = false;
+        dbLoading = false;
+        if (dbPending) loadDb();
+      });
+  }
+  $effect(() => {
+    dbQuery;
+    dbType;
+    dbShown;
+    dbSlot;
+    untrack(loadDb);
   });
 
   function equipSlot(slot: string, id: number) {
@@ -543,8 +588,13 @@
 
   function selectItem(id: number | null) {
     hideTip();
+    if (id != null && itemWindow.open) {
+      void itemWindow.show(id);
+      return;
+    }
     selectedItem = id;
   }
+  const shownItem = $derived(selectedItem ?? (itemWindow.open ? itemWindow.itemId : null));
 
   $effect(() => {
     const j = ui.jump;
@@ -834,7 +884,7 @@
       <button class="btn sm" class:on={slotsResp?.useSecondWeaponSet} onclick={() => build.run(() => engine.setWeaponSet(2))}><span class="set2">II</span></button>
     </div>
     <span class="vr"></span>
-    <button class="btn sm" onclick={openCraft}>{m.items_craft()}</button>
+    <button class="btn sm" onclick={() => openCraft()}>{m.items_craft()}</button>
     <button class="btn sm" onclick={() => openEdit(null)} disabled={previewCommitting}>{m.items_new_from_text()}</button>
     <button class="btn sm" onclick={pasteItem} disabled={previewCommitting} title={m.items_paste_hint()}>{m.items_paste()}</button>
     <button class="btn sm ghost" title={m.items_trader_title()} onclick={() => openTrader(null)}>{m.items_trader()}</button>
@@ -874,8 +924,8 @@
         {/if}
       </div>
       {#if wickermanOpen}
-      <div class="scroll">
-        <EquipmentGrid slots={wickermanSlots} areas={wickermanAreas} {items} game={game.current} {selectedItem} legend={false}
+      <div class="scroll scroll-hint" {@attach scrollHint}>
+        <EquipmentGrid slots={wickermanSlots} areas={wickermanAreas} {items} game={game.current} selectedItem={shownItem} legend={false}
           onselect={selectItem}
           onitemhover={(event, id) => itemTip(event, id)}
           ongemhover={() => {}}
@@ -887,7 +937,7 @@
         {#if wickermanEmpty}<p class="sqnote">{m.wickerman_no_items()}</p>{/if}
       </div>
       {:else if squireOpen}
-      <div class="scroll">
+      <div class="scroll scroll-hint" {@attach scrollHint}>
         <div class="squirehead">
           <span class="sqname">{m.squire_title()}</span>
           {#if squire?.level != null}<span class="dim num small">{m.squire_level({ level: squire.level })}</span>{/if}
@@ -898,7 +948,7 @@
           {/if}
         </div>
         {#if !squire?.present}<p class="sqnote warn">{m.squire_no_skill()}</p>{/if}
-        <EquipmentGrid slots={squireSlots} {items} game={game.current} {selectedItem} legend={false}
+        <EquipmentGrid slots={squireSlots} {items} game={game.current} selectedItem={shownItem} legend={false}
           onselect={selectItem}
           onitemhover={(event, id) => itemTip(event, id)}
           ongemhover={() => {}}
@@ -912,9 +962,12 @@
         <p class="sqnote">{m.squire_note()}</p>
       </div>
       {:else}
-      <div class="scroll">
-        <EquipmentGrid slots={characterSlots} {items} game={game.current} groups={build.skills?.socketGroups ?? []} {selectedItem}
-          onselect={selectItem}
+      <div class="scroll scroll-hint" {@attach scrollHint}>
+        <EquipmentGrid slots={characterSlots} {items} game={game.current} groups={build.skills?.socketGroups ?? []} selectedItem={shownItem}
+          targetSlot={preview ? previewSlot : selectedItem == null ? dbSlot : null}
+          onselect={(id) => selectItem(selectedItem === id ? null : id)}
+          onempty={(slot) => findForSlot(slot)}
+          onslotmenu={openSlotMenu}
           onactive={setSlotActive}
           onitemhover={(event, id) => showTip(event, `i${id}`, () => engine.itemTooltip({ itemId: id }))}
           ongemhover={(event, group, gem) => showTip(event, `g${group}:${gem}`, () => engine.gemTooltip(group, gem))}
@@ -938,11 +991,11 @@
     <section class="col" bind:this={listCol}>
       {@render grip("list")}
       <div class="panel-head"><span class="label">{m.items_in_build()}</span><span class="dim num">{items.length}</span></div>
-      <div class="scroll">
+      <div class="scroll scroll-hint" {@attach scrollHint}>
         {#each items as it (it.id)}
           <div
             class="item"
-            class:sel={selectedItem === it.id}
+            class:sel={shownItem === it.id}
             role="note"
             onmouseenter={(e) => showTip(e, `i${it.id}`, () => engine.itemTooltip({ itemId: it.id }))}
             onmouseleave={hideTip}
@@ -964,25 +1017,6 @@
           <div class="dim small pad">{m.items_none()}</div>
         {/if}
       </div>
-      <div class="panel-head">
-        <span class="label">{m.items_shared()}</span>
-        <span class="dim num">{shared.length}</span>
-      </div>
-      <div class="scroll sharedlist" title={m.items_shared_title()}>
-        {#each shared as it (it.index)}
-          <div class="item">
-            <span class="iname" style:color={rarityColor[it.rarity ?? ""] ?? "var(--fg-1)"}>{it.name}</span>
-            <span class="itag dim">{it.baseName ?? ""}</span>
-            <span class="iops">
-              <button class="mini w" title={m.items_shared_equip_title()} onclick={() => build.run(() => engine.equipSharedItem(it.index))}>{m.items_equip()}</button>
-              <button class="mini x" title={m.items_shared_remove_title()} onclick={() => removeShared(it)}>✕</button>
-            </span>
-          </div>
-        {/each}
-        {#if shared.length === 0}
-          <div class="dim small pad">{m.items_shared_none()}</div>
-        {/if}
-      </div>
     </section>
 
     <section class="col db">
@@ -991,19 +1025,10 @@
           <span class="label">{m.items_preview_title()}</span>
           <button class="btn sm ghost" onclick={discardPreview} disabled={itemTransitionBusy}>{m.items_preview_discard()}</button>
         </div>
-        <div class="scroll detailpane" bind:this={detailPane} onscroll={followDetailScroll}>
+        <div class="scroll detailpane scroll-hint" {@attach scrollHint} bind:this={detailPane} onscroll={scrollHold.follow}>
           <div class="detailcontent">
             <p class="dim small">{m.items_preview_note()}</p>
-            {#if preview.tooltip.header}
-              <ItemFrame lines={preview.tooltip.lines} header={preview.tooltip.header} runic={preview.tooltip.runic} uniqueGem={preview.tooltip.uniqueGem} />
-            {:else}
-              <div class="ttbox plain">
-                {#each preview.tooltip.lines as l}
-                  {#if l.sep}<div class="tsep"></div>
-                  {:else}<div class="tline" class:tcenter={l.center} style={lineStyle(l)}><PobText text={l.text} /></div>{/if}
-                {/each}
-              </div>
-            {/if}
+            <ItemTooltipBox tt={preview.tooltip} art={false} />
             <div class="modrow">
               <button class="btn sm" onclick={editPreview} disabled={itemTransitionBusy}>{m.items_preview_edit()}</button>
               <button class="btn sm primary" onclick={() => addPreview(false)} disabled={itemBusy || previewStale}>{m.items_preview_add()}</button>
@@ -1028,73 +1053,87 @@
             />
           </div>
         </div>
-      {:else if selectedItem != null && detail?.itemId === selectedItem}
-        <div class="panel-head">
-          <span class="label">{m.items_item()}</span>
-          <button class="btn sm ghost" onclick={() => (buySimilarFor = selectedItem)} title={m.items_buy_similar_title()}>{m.items_buy_similar()}</button>
-          <button class="btn sm ghost" onclick={() => selectItem(null)} disabled={itemTransitionBusy}>{m.items_back_to_database()}</button>
-        </div>
-        <div class="scroll detailpane" bind:this={detailPane} onscroll={followDetailScroll}>
-          <div class="detailcontent">
-            {#if detail.tt.header}
-              <div class="ttbox">
-                <ItemFrame lines={detail.tt.lines} header={detail.tt.header} runic={detail.tt.runic} uniqueGem={detail.tt.uniqueGem} itemArt={detail.tt.itemArt} />
-              </div>
-            {:else}
-              <div class="ttbox plain">
-                {#each detail.tt.lines as l}
-                  {#if l.sep}
-                    <div class="tsep"></div>
-                  {:else}
-                    <div class="tline" class:tcenter={l.center} style={lineStyle(l)}><PobText text={l.text} /></div>
-                  {/if}
-                {/each}
-              </div>
-            {/if}
-
-            <ItemCustomizationControls
-              data={detail.customization}
-              target={{ itemId: selectedItem, generation }}
-              busy={itemBusy}
-              onchange={customizeSavedItem}
-              onpendingchange={setAffixPending}
-            />
-
+      {:else if selectedItem != null}
+        <ItemDetailHead
+          saved={templateSaved === selectedItem}
+          busy={itemBusy}
+          onsave={() => selectedItem != null && addShared(selectedItem)}
+          onbuy={() => (buySimilarFor = selectedItem)}
+          move={{ icon: "arrow-square-out", title: m.items_pop_out_title(), onclick: popOut }}
+          close={{ title: m.items_back_to_database(), disabled: itemTransitionBusy, onclick: () => selectItem(null) }}
+        />
+        <ItemDetailPane
+          itemId={selectedItem}
+          {generation}
+          rev={build.rev}
+          busy={build.busy > 0}
+          bind:transitioning={detailTransition}
+          onmissing={() => selectItem(null)}
+        >
+          {#if selectedEquippedSlot}
             <div class="craftsec">
               <div class="label">{m.items_modify()}</div>
               <div class="modrow">
-                <button class="btn sm ghost" onclick={() => selectedItem != null && addShared(selectedItem)} disabled={itemBusy}>{m.items_add_to_shared()}</button>
-                {#if selectedEquippedSlot}
-                  <button class="btn sm ghost" title={m.items_find_upgrades_title()} onclick={() => openTrader(selectedEquippedSlot!)}>{m.items_find_upgrades()}</button>
-                {/if}
+                <button class="btn sm ghost" title={m.items_find_upgrades_title()} onclick={() => openTrader(selectedEquippedSlot!)}>{m.items_find_upgrades()}</button>
               </div>
             </div>
-          </div>
-        </div>
+          {/if}
+        </ItemDetailPane>
       {:else}
       <div class="panel-head dbhead">
         <span class="tabs2">
-          <button class="t2" class:on={dbShown === "unique"} onclick={() => { dbTab = "unique"; dbType = ""; }}>{m.items_db_uniques()}</button>
-          <button class="t2" class:on={dbShown === "rare"} onclick={() => { dbTab = "rare"; dbType = ""; }}>{m.items_db_rares()}</button>
+          <button class="t2" class:on={!sharedTab && dbShown === "unique"} onclick={() => { dbTab = "unique"; sharedTab = false; dbType = ""; }}>{m.items_db_uniques()}</button>
+          <button class="t2" class:on={!sharedTab && dbShown === "rare"} onclick={() => { dbTab = "rare"; sharedTab = false; dbType = ""; }}>{m.items_db_rares()}</button>
           {#if wickermanSlots.length}
-            <button class="t2" class:on={dbShown === "viscera"} onclick={() => { dbTab = "viscera"; dbType = ""; }}>{m.items_db_viscera()}</button>
+            <button class="t2" class:on={!sharedTab && dbShown === "viscera"} onclick={() => { dbTab = "viscera"; sharedTab = false; dbType = ""; }}>{m.items_db_viscera()}</button>
           {/if}
+          <button class="t2" class:on={sharedTab} title={m.items_shared_title()} onclick={() => (sharedTab = true)}>{m.items_shared()}</button>
         </span>
-        <span class="dim num">{dbTotal}</span>
+        <span class="dim num">{sharedTab ? sharedRows.length : dbTotal}</span>
       </div>
       <div class="dbbar">
         <span class="hinted">
           <input class="input" placeholder={m.common_search()} bind:value={dbQuery} bind:this={dbSearchEl} />
           {#if !dbQuery}<Kbd keys="Mod+F" hint />{/if}
         </span>
-        <select class="select typesel" bind:value={dbType}>
-          <option value="">{m.common_all_types()}</option>
-          {#each dbTypes as t}
-            <option value={t.type}>{t.type} ({t.count})</option>
-          {/each}
-        </select>
+        {#if sharedTab}
+          <button class="btn sm" onclick={() => openCraft(null, false)}>{m.items_craft()}</button>
+        {:else}
+          <select class="select typesel" bind:value={dbType}>
+            <option value="">{m.common_all_types()}</option>
+            {#each dbTypes as t}
+              <option value={t.type}>{t.type} ({t.count})</option>
+            {/each}
+          </select>
+        {/if}
       </div>
-      <div class="scroll">
+      {#if dbSlot}
+        <div class="slotbar">
+          <span>{m.items_db_for_slot({ slot: slotLabel(dbSlotInfo?.label ?? dbSlot) })}</span>
+          <button class="mini x" title={m.items_db_clear_slot()} aria-label={m.items_db_clear_slot()} onclick={() => (dbSlot = null)}>✕</button>
+        </div>
+      {/if}
+      <div class="scroll scroll-hint" {@attach scrollHint}>
+        {#if sharedTab}
+          {#each sharedRows as it (it.index)}
+            <div
+              class="item"
+              role="note"
+              onmouseenter={(e) => showTip(e, `h${it.raw}`, () => engine.itemTooltip({ raw: it.raw }))}
+              onmouseleave={hideTip}
+            >
+              <button class="iname" style:color={rarityColor[it.rarity ?? ""] ?? "var(--fg-1)"} onclick={(e) => previewOnOpen(e, async () => it.raw)}>{it.name}</button>
+              <span class="itag dim">{it.baseName ?? ""}</span>
+              <span class="iops">
+                <button class="mini w" title={m.items_shared_equip_title()} onclick={() => equipShared(it.index)}>{m.items_equip()}</button>
+                <button class="mini x" title={m.items_shared_remove_title()} onclick={() => removeShared(it)}>✕</button>
+              </span>
+            </div>
+          {/each}
+          {#if sharedRows.length === 0}
+            <div class="dim small pad">{shared.length ? m.items_db_none() : m.items_shared_none()}</div>
+          {/if}
+        {:else}
         {#if dbLoading}
           <div class="dim small pad">{m.items_db_parsing()}</div>
         {/if}
@@ -1105,15 +1144,16 @@
             onmouseenter={(e) => showTip(e, `d${dbShown}:${row.name}:${build.rev}`, () => engine.itemTooltip({ db: dbShown, name: row.name }))}
             onmouseleave={hideTip}
           >
-            <span class="iname" style:color={rarityColor[row.rarity ?? ""] ?? "var(--fg-1)"}>{row.name}</span>
+            <button class="iname" style:color={rarityColor[row.rarity ?? ""] ?? "var(--fg-1)"} onclick={(e) => previewOnOpen(e, async () => (await engine.itemDbRaw(dbShown, row.name)).raw)}>{row.name}</button>
             <span class="itag dim">{row.baseName ?? row.type}</span>
             <span class="iops">
-              <button class="mini w" title={m.items_db_equip_title()} onclick={() => build.run(() => engine.itemDbEquip(dbShown, row.name))}>{m.items_equip()}</button>
+              <button class="mini w" title={m.items_db_equip_title()} onclick={() => equipFromDb(row.name)}>{m.items_equip()}</button>
             </span>
           </div>
         {/each}
         {#if !dbLoading && dbRows.length === 0}
           <div class="dim small pad">{m.items_db_none()}</div>
+        {/if}
         {/if}
       </div>
       {/if}
@@ -1124,12 +1164,15 @@
     <div class="modal">
       <div class="panel dialog craftdlg">
         <div class="label">{m.items_craft_title()}</div>
+        {#if craftSlot}
+          <div class="dim small">{m.items_db_for_slot({ slot: slotLabel(characterSlots.find((s) => s.slot === craftSlot)?.label ?? craftSlot) })}</div>
+        {/if}
         <div class="crow">
           <span class="clabel">{m.items_rarity()}</span>
           <select class="select" bind:value={craftRarity}>
             <option value="NORMAL">{m.items_rarity_normal()}</option>
             <option value="MAGIC">{m.items_rarity_magic()}</option>
-            <option value="RARE">{m.items_rarity_rare()}</option>
+            {#if !craftNoRare}<option value="RARE">{m.items_rarity_rare()}</option>{/if}
             <option value="UNIQUE">{m.items_rarity_unique()}</option>
           </select>
         </div>
@@ -1186,6 +1229,10 @@
         </div>
       </div>
     </div>
+  {/if}
+
+  {#if slotMenu}
+    <ContextMenu x={slotMenu.x} y={slotMenu.y} label={m.items_slot_menu()} items={slotMenuItems} onclose={() => (slotMenu = null)} />
   {/if}
 
   {#if traderOpen}
@@ -1257,10 +1304,6 @@
     letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--fg-3);
-  }
-  .sharedlist {
-    flex: 0 0 auto;
-    max-height: 200px;
   }
   .modrow {
     display: flex;
@@ -1502,6 +1545,16 @@
     min-width: 0;
     font-size: var(--fs-xs);
   }
+  .slotbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px 4px 12px;
+    border-bottom: 1px solid var(--line-0);
+    background: color-mix(in oklab, var(--focus) 8%, transparent);
+    color: var(--focus);
+    font-size: var(--fs-xs);
+  }
   .modal {
     position: absolute;
     inset: 0;
@@ -1547,25 +1600,6 @@
     padding: 10px 12px;
     box-sizing: border-box;
     flex-shrink: 0;
-  }
-  .ttbox.plain {
-    padding: 10px 12px;
-    border: 1px solid var(--line-0);
-    border-radius: var(--r-2);
-    background: var(--bg-1);
-    line-height: 1.45;
-  }
-  .tline {
-    color: var(--fg-1);
-    white-space: pre-wrap;
-  }
-  .tcenter {
-    text-align: center;
-  }
-  .tsep {
-    height: 1px;
-    background: var(--line-1);
-    margin: 6px 0;
   }
   .craftsec {
     display: flex;

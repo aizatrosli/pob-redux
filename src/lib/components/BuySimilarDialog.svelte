@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { scrollHint } from "$lib/scroll-hint";
   import { onMount } from "svelte";
   import { tradeWindow } from "$lib/state/trade.svelte";
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -56,7 +57,7 @@
       listed = saved.listed && saved.listed >= 1 && saved.listed <= i.listed.length ? saved.listed : 1;
       defences = i.defences.map((d) => ({ checked: false, min: String(d.value), max: "" }));
       mods = i.mods.map((mod) => ({
-        checked: false,
+        checked: "raw" in target && mod.searchable,
         min: mod.ranged && typeof mod.value === "number" && mod.value !== 0 ? String(mod.value) : "",
         max: "",
       }));
@@ -113,7 +114,7 @@
       <button class="btn sm ghost" onclick={onclose}>{m.common_close()}</button>
     </div>
 
-    <div class="mbody">
+    <div class="mbody scroll-hint" {@attach scrollHint}>
       {#if !info && !error}
         <div class="dim small">{m.buy_reading()}</div>
       {:else if info}

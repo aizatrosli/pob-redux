@@ -430,28 +430,6 @@ export interface SavedBuildFile {
   snapshot: { xml: string; fileModified: number | null; unsaved: boolean };
 }
 
-export interface NinjaCharacter {
-  name: string;
-  className: string | null;
-  level: number;
-  league: string;
-  leagueUrl: string;
-  updated: string | null;
-  isCurrent: boolean;
-  /** "listed" when poe.ninja has the build; otherwise its reason: "belowCutoff", "leagueEnded", "inactive", "notFetched" or "unlisted". */
-  status: string;
-  minLevel: number | null;
-}
-
-/** `account` comes back as poe.ninja spells it. */
-export function ninjaCharacters(account: string): Promise<{ account: string; characters: NinjaCharacter[] }> {
-  return invoke<{ account: string; characters: NinjaCharacter[] }>("ninja_characters", { account });
-}
-
-export function ninjaCharacterCode(account: string, character: string, league: string): Promise<string> {
-  return invoke<string>("ninja_character_code", { account, character, league });
-}
-
 export interface MaxrollPobLink {
   name: string;
   /** The planner the link came from, or the guide text. */
@@ -876,6 +854,10 @@ export interface GemInfo {
   countable: boolean;
   /** PoE1 Vaal gems: the Vaal skill and its base skill, each switched on or off on its own. */
   globalEffects?: { index: 1 | 2; name: string; enabled: boolean }[] | null;
+  corrupted?: boolean;
+  corruptLevel?: number;
+  /** PoE2 active skill gems the player socketed; PoE1 has no per-gem corruption. */
+  corruptible?: boolean;
   errMsg: string | null;
   /** Set when the game hands the skill out (a weapon's default attack, Raise Shield, a unique's skill): says what it comes with. */
   granted: string | null;
@@ -1639,7 +1621,7 @@ export interface CompareLoadout {
   socketGroups: { index: number; label: string; active: boolean }[];
 }
 
-export type BuySimilarTarget = { itemId: number } | { slot: string; side: "mine" | "theirs" };
+export type BuySimilarTarget = { itemId: number } | { slot: string; side: "mine" | "theirs" } | { raw: string; slot: string };
 
 export interface BuySimilarInfo {
   name: string;
@@ -1912,7 +1894,7 @@ export const engine = {
   setGem: (
     groupIndex: number,
     gemIndex: number,
-    patch: Partial<Pick<GemInfo, "level" | "quality" | "enabled" | "count">> & { enableGlobal1?: boolean; enableGlobal2?: boolean },
+    patch: Partial<Pick<GemInfo, "level" | "quality" | "enabled" | "count" | "corrupted" | "corruptLevel">> & { enableGlobal1?: boolean; enableGlobal2?: boolean },
   ) =>
     call<Skills>("set_gem", { groupIndex, gemIndex, ...patch }),
   listSlots: () => call<SlotsResponse>("list_slots"),
@@ -1923,7 +1905,7 @@ export const engine = {
   equipItem: (slot: string, itemId: number) => call<SlotsResponse>("equip_item", { slot, itemId }),
   setSlotActive: (slot: string, active: boolean) => call<SlotsResponse>("set_slot_active", { slot, active }),
   deleteItem: (itemId: number) => call<{ items: ItemInfo[] }>("delete_item", { itemId }),
-  itemDbList: (opts: { db: ItemDbName; query?: string; type?: string; limit?: number; offset?: number }) =>
+  itemDbList: (opts: { db: ItemDbName; query?: string; type?: string; slot?: string; limit?: number; offset?: number }) =>
     call<{ items: ItemDbRow[]; total: number; offset: number; types: { type: string; count: number }[] }>("item_db_list", opts),
   statDifferences: (show?: boolean) => call<{ show: boolean }>("stat_differences", show === undefined ? undefined : { show }),
   itemTooltip: (opts: { itemId?: number; db?: ItemDbName; name?: string; raw?: string; slotName?: string | false }) =>
@@ -1939,11 +1921,13 @@ export const engine = {
   /** `variants`: one entry per pick, a variant's name, a substring of it, or its index. */
   itemDbEquip: (db: ItemDbName, name: string, slotName?: string, variants?: (string | number)[]) =>
     call<{ ok: boolean; itemId: number; slot: string; itemName: string; variants: string[]; mods: string[] }>("item_db_equip", { db, name, slotName, variants }),
+  itemDbRaw: (db: ItemDbName, name: string) => call<{ raw: string }>("item_db_raw", { db, name }),
   itemRaw: (itemId: number) => call<{ raw: string }>("item_raw", { itemId }),
   itemEdit: (text: string, itemId?: number, generation?: number) => call<{ ok: boolean; itemId: number; name: string }>("item_edit", { text, itemId, generation }),
   setWeaponSet: (set: 1 | 2) => call<SlotsResponse>("set_weapon_set", { set }),
-  craftBases: () => call<{ types: string[]; bases: Record<string, CraftBase[]> }>("craft_bases"),
-  craftItem: (opts: { type: string; baseName: string; rarity?: string; title?: string; equip?: boolean }) =>
+  /** With `slot`, only bases that fit it; `noRare` lists types PoB crafts as Magic at most (flasks, charms). */
+  craftBases: (slot?: string) => call<{ types: string[]; bases: Record<string, CraftBase[]>; noRare: string[] }>("craft_bases", slot ? { slot } : undefined),
+  craftItem: (opts: { type: string; baseName: string; rarity?: string; title?: string; equip?: boolean; slotName?: string }) =>
     call<{ ok: boolean; itemId: number; name: string; crafted: boolean }>("craft_item", opts),
   itemAffixes: (itemId: number) => call<ItemAffixes>("item_affixes", { itemId }),
   itemAffixRolls: (target: ItemTarget, table: "prefixes" | "suffixes", index: number, seriesId: string) =>
@@ -1982,7 +1966,8 @@ export const engine = {
   getSharedItems: () => call<{ items: SharedItem[] }>("get_shared_items"),
   addSharedItem: (p: { itemId?: number; raw?: string }) => call<{ items: SharedItem[] }>("add_shared_item", p),
   removeSharedItem: (index: number) => call<{ items: SharedItem[] }>("remove_shared_item", { index }),
-  equipSharedItem: (index: number, slotName?: string) => call<unknown>("equip_shared_item", { index, slotName }),
+  equipSharedItem: (index: number, slotName?: string) =>
+    call<{ ok: boolean; itemId: number; slot: string; itemName: string }>("equip_shared_item", { index, slotName }),
   tradeSearchStart: (p: TradeQueryOptions) => call<{ started: boolean }>("trade_search_start", p),
   weightedTradeLink: (p: WeightedTradeLinkOptions) =>
     call<{ tradeUrl: string; itemName: string; slot: string; realm: string; league: string; maxPrice: number; currency: string }>("weighted_trade_link", p),
